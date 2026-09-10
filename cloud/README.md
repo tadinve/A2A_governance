@@ -64,7 +64,9 @@ For a production resource, replace `roles/browser` with the narrowest resource-l
 
 ## A2A continuation
 
-The root project demonstrates the full A2A call deterministically. To expose Procurement Agent as a managed A2A endpoint and consume it from Inventory Agent with `RemoteA2aAgent`, follow Google's current [A2A Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime). The authorization rule is the same: the caller's ADC becomes its Agent Identity inside Agent Runtime, and IAM on the target decides whether that principal may invoke it.
+[DEPLOYED_AGENTS.md](DEPLOYED_AGENTS.md) takes this further: it deploys **both** Inventory Agent and Procurement Agent as separate Agent Runtime instances, each with its own Agent Identity, and has Inventory Agent call Procurement Agent using that identity. The first call returns 403 until you grant an IAM role, which makes the authentication-versus-authorization distinction concrete.
+
+`bash cloud/deploy_agents.sh` deploys both. For the `RemoteA2aAgent` variant, follow Google's current [A2A Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime). The authorization rule is the same: the caller's ADC becomes its Agent Identity inside Agent Runtime, and IAM on the target decides whether that principal may invoke it.
 
 ## Cleanup
 
