@@ -1,0 +1,12 @@
+{
+  "zoho-inventory-connector": {
+    "client_secret": "inventory-connector-demo-secret",
+    "refresh_token": "inventory-refresh-token-demo",
+    "scopes": ["ZohoInventory.items.READ"]
+  },
+  "zoho-procurement-connector": {
+    "client_secret": "procurement-connector-demo-secret",
+    "refresh_token": "procurement-refresh-token-demo",
+    "scopes": ["ZohoInventory.purchaseorders.CREATE", "ZohoInventory.purchaseorders.READ", "ZohoInventory.purchaseorders.UPDATE"]
+  }
+}

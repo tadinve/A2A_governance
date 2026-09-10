@@ -14,6 +14,7 @@ ISSUER = "https://identity.demo.local"
 IDP_URL = os.getenv("IDP_URL", "http://127.0.0.1:8101")
 REGISTRY_URL = os.getenv("REGISTRY_URL", "http://127.0.0.1:8100")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:8102")
+ZOHO_URL = os.getenv("ZOHO_URL", "http://127.0.0.1:8107")
 
 
 def load_json(filename: str) -> dict:
@@ -23,4 +24,3 @@ def load_json(filename: str) -> dict:
 def ensure_directories() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-

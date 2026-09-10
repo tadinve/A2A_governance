@@ -1,65 +1,63 @@
-# Agent Identity, Authorization, and A2A Governance Demo
+# Agent Identity, A2A, MCP, and Zoho Governance Demo
 
-This package is a self-contained, classroom-ready demonstration of how a human request becomes a governed agent-to-agent call and then an authorized governed enterprise-resource call.
+This self-contained classroom demo shows a realistic procurement workflow:
 
-It has two modes:
+1. a human asks **Inventory Agent** to check an item;
+2. Inventory Agent uses a read-only MCP server to query the Zoho Inventory emulator;
+3. low stock causes Inventory Agent to call **Procurement Agent** through A2A;
+4. Procurement Agent uses a separate MCP server and OAuth client to create and submit a purchase-order draft;
+5. a human reviews and approves the exact draft in a simulated Zoho UI;
+6. Inventory Agent obtains final status through Procurement Agent.
 
-- **Local mode** runs on any machine with Python 3.11+, Bash, and `curl`. It needs no cloud account, LLM, or API key. It uses real signed JWTs, audience and scope validation, RFC 8693-style token exchange, an A2A-style JSON-RPC message, OpenTelemetry spans, and audit logs. Google Cloud products are explicitly represented as local simulators.
-- **Google Cloud extension** deploys a real Agent Development Kit agent to Agent Runtime with Agent Identity and Cloud Trace enabled, then shows its canonical identity and how to bind it in IAM. The local runtime remains the deterministic end-to-end A2A authorization lab.
+The package needs only Python 3.11+, Bash, and `curl`. It uses signed RS256 JWTs, RFC 8693-style token exchange, audience and scope checks, A2A-style JSON-RPC, MCP-style `tools/call`, Zoho-style OAuth refresh-token exchange, human session authentication, tamper-evident approval, idempotency, audit events, and OpenTelemetry spans. No cloud account, LLM, or external SaaS account is required.
 
-## Five-minute local demo
+## Five-minute demo
 
 ```bash
-git clone <this-repo> && cd A2A_governance
+unzip agent-identity-a2a-governance-demo.zip
+cd agent-identity-a2a-demo
 bash scripts/setup.sh
+bash scripts/verify.sh
+```
+
+Or run each stage:
+
+```bash
 bash scripts/start_local.sh
 bash scripts/run_demo.sh
 bash scripts/show_evidence.sh
 bash scripts/stop_local.sh
 ```
 
-For one-command verification after setup:
+Raw bearer credentials are never printed. The script also proves that direct calls, approval without a human session, and an agent-visible approval tool are denied.
 
-```bash
-bash scripts/verify.sh
-```
+## Components and ports
 
-The successful path is:
-
-```text
-Human -> Agent A -> Registry -> Identity Broker -> Gateway -> Agent B
-                                                        Agent B -> Identity Broker -> Gateway -> SAP API
-```
-
-The demo prints only safe token claims; it never prints bearer credentials. It also proves two negative cases: direct access to Agent B is rejected, and unsafe content is blocked at the gateway.
-
-## What to read
-
-- [ARCHITECTURE.md](ARCHITECTURE.md): trust boundaries, tokens, and sequence
-- [COMPONENTS.md](COMPONENTS.md): every component, control, and proof point
-- [DEMO_GUIDE.md](DEMO_GUIDE.md): presenter script and expected results
-- [SOURCE_ALIGNMENT.md](SOURCE_ALIGNMENT.md): mapping to the supplied governance deck
-- [SECURITY_NOTES.md](SECURITY_NOTES.md): what is real, simulated, and production-grade
-- [ADK_WEB_AND_TRACES.md](ADK_WEB_AND_TRACES.md): why local sessions and Cloud Trace differ
-- [cloud/README.md](cloud/README.md): actual Agent Identity and IAM extension
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): common fixes
-
-## Ports
-
-| Port | Component | Role |
+| Port | Component | Responsibility |
 |---:|---|---|
-| 8100 | Agent Registry simulator | Discovers approved agents and resources |
-| 8101 | Identity Provider/Auth Manager simulator | Issues and exchanges signed tokens |
-| 8102 | Agent Gateway simulator | Enforces route, scope, and content policy |
-| 8103 | Agent A: Inventory Orchestrator | Accepts the user request and delegates |
-| 8104 | Agent B: Inventory Specialist | Receives A2A and invokes SAP |
-| 8105 | SAP Inventory API simulator | Returns protected enterprise data |
+| 8100 | Agent Registry | Agent discovery metadata |
+| 8101 | Identity Broker/Auth Manager | Human token, agent credentials, delegated tokens |
+| 8102 | Agent Gateway | Audience, actor, scope, route, and content enforcement |
+| 8103 | Inventory Agent | Checks stock and orchestrates reorder |
+| 8104 | Procurement Agent | Owns PO drafting and status capabilities |
+| 8105 | Zoho Inventory MCP | Exposes only `get_inventory` |
+| 8106 | Zoho Procurement MCP | Exposes create-draft and status tools; never approve |
+| 8107 | Zoho Inventory Emulator | OAuth server, inventory/PO API, and human approval UI API |
 
-Swagger UIs are available at `http://127.0.0.1:PORT/docs` while the demo is running.
+Swagger UI is at `http://127.0.0.1:PORT/docs` while running.
+
+## Read next
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): trust planes, sequence, and tokens
+- [COMPONENTS.md](COMPONENTS.md): every component and proof point
+- [DEMO_GUIDE.md](DEMO_GUIDE.md): presenter script
+- [SECURITY_NOTES.md](SECURITY_NOTES.md): production mapping and caveats
+- [ADK_WEB_AND_TRACES.md](ADK_WEB_AND_TRACES.md): sessions versus Cloud Trace
+- [cloud/README.md](cloud/README.md): actual Google Cloud Agent Identity extension
 
 ## Trace export
 
-Local JSONL export is the default and is always available. To additionally send spans to Google Cloud Trace, authenticate Application Default Credentials, grant the caller `roles/cloudtrace.agent`, set the project, and start with:
+JSONL traces are always written locally. To additionally export to Google Cloud Trace:
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID"
@@ -67,8 +65,4 @@ export TRACE_EXPORTER=gcp
 bash scripts/start_local.sh
 ```
 
-This answers a common ADK Web confusion: **sessions and traces are different data planes**. Local `adk web` sessions remain in its configured session service and do not automatically appear under a deployed Agent Engine's Sessions tab. OpenTelemetry spans can still appear in Trace Explorer if the process exports them to Cloud Trace. This demo makes that separation visible.
-
-## Requirements and cost
-
-Local mode is free. The cloud extension uses billable Google Cloud resources and Preview APIs; run its explicit cleanup command when finished.
+Local `adk web` sessions do not automatically appear under a deployed Agent Engine's Sessions tab. OpenTelemetry spans can still appear in Trace Explorer when the process exports them.

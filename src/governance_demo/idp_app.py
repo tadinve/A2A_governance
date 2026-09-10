@@ -39,18 +39,18 @@ def health() -> dict:
 
 
 @app.post("/login")
-def login(user_id: str = Form("demo-user")) -> dict:
+def login(user_id: str = Form("venkatesh")) -> dict:
     """Simulate Cloud Identity sign-in; no password because this is a closed demo."""
     with tracer.start_as_current_span("identity.user_login") as span:
         span.set_attribute("enduser.id", user_id)
         token = issue_token(
             subject=user_id,
-            audience="agent-a",
+            audience="inventory-agent",
             scopes=["assistant.inventory"],
             token_kind="user_access_token",
             lifetime_seconds=900,
         )
-        record("identity-broker", "USER_TOKEN_ISSUED", user=user_id, audience="agent-a")
+        record("identity-broker", "USER_TOKEN_ISSUED", user=user_id, audience="inventory-agent")
         return {"access_token": token, "token_type": "Bearer", "expires_in": 900}
 
 

@@ -16,9 +16,11 @@ services=(
   "registry_app:8100:registry"
   "idp_app:8101:identity"
   "gateway_app:8102:gateway"
-  "agent_a_app:8103:agent-a"
-  "agent_b_app:8104:agent-b"
-  "sap_app:8105:sap"
+  "agent_a_app:8103:inventory-agent"
+  "agent_b_app:8104:procurement-agent"
+  "inventory_mcp_app:8105:inventory-mcp"
+  "procurement_mcp_app:8106:procurement-mcp"
+  "zoho_app:8107:zoho"
 )
 
 for spec in "${services[@]}"; do
@@ -32,10 +34,10 @@ for spec in "${services[@]}"; do
   echo $! >"runtime/$name.pid"
 done
 
-for port in 8100 8101 8102 8103 8104 8105; do
+for port in 8100 8101 8102 8103 8104 8105 8106 8107; do
   ready=false
   for _ in {1..40}; do
-    if curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$port/health" >/dev/null; then
       ready=true
       break
     fi
@@ -48,4 +50,4 @@ for port in 8100 8101 8102 8103 8104 8105; do
   fi
 done
 
-echo "All six services are ready. Run: bash scripts/run_demo.sh"
+echo "All eight services are ready. Run: bash scripts/run_demo.sh"

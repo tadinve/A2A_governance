@@ -1,43 +1,38 @@
 # Security and Production Notes
 
-## What is genuinely exercised locally
+## What is exercised
 
-- RS256 signatures and public-key verification
-- issuer, expiry, not-before, audience, and scope validation
-- separate client authentication for Agent A and Agent B
-- subject/actor token exchange shaped like RFC 8693
-- nested delegation evidence
-- policy-enforced gateway routing
-- A2A-style Agent Card and JSON-RPC `message/send`
-- positive and negative authorization paths
-- distributed context propagation and OpenTelemetry spans
+- RS256 human/agent JWT signatures; issuer, expiry, audience, and scope validation
+- RFC 8693-shaped subject/actor exchange with nested `act` provenance
+- separate Inventory Agent and Procurement Agent credentials
+- route policy at a gateway
+- A2A-style Agent Card and JSON-RPC messages
+- MCP-style narrow `tools/call` interfaces
+- two independent Zoho OAuth refresh grants and opaque access tokens
+- human session authentication and approver-role check
+- exact-draft SHA-256 approval binding
+- idempotent PO creation
+- OpenTelemetry and append-only audit events
 
-## What is intentionally simulated
+## Deliberately simulated
 
-| Demo component | Production Google Cloud analogue |
+| Demo | Production equivalent |
 |---|---|
-| Login endpoint | Cloud Identity / workforce identity |
-| SPIFFE-style local IDs | Agent Identity resource principals |
-| Identity broker | Google Cloud authentication and Auth Manager |
-| JSON policy file | IAM policies and gateway policy |
-| FastAPI gateway | Agent Gateway |
-| Phrase filter | Model Armor/content-safety controls |
-| Inventory JSON | SAP system and its authorization model |
-| Local JSONL | Cloud Trace, Cloud Logging, and Cloud Audit Logs |
+| SPIFFE-style labels and local JWT issuer | Google Cloud Agent Identity/IAM |
+| JSON policy and FastAPI gateway | IAM plus Agent Gateway |
+| Local token broker | Auth Manager/platform token exchange |
+| MCP JSON-RPC subset | Production MCP SDK/server |
+| Zoho OAuth/API/UI emulator | Zoho Accounts and Zoho Inventory |
+| JSONL telemetry | Cloud Trace, Logging, Audit Logs |
 
-`X-Gateway-Verified` is only a local trust-boundary marker. It is not secure across an untrusted network. Production enforcement should use platform routing, authenticated ingress, TLS/mTLS, and IAM rather than a forgeable header.
+The Zoho payload shapes and scope names intentionally resemble Zoho Inventory, but the emulator is not a conformance test and does not promise wire-level parity with every API version.
 
-The client secrets are conspicuously marked demo values and committed only so the package is self-contained. Production secrets belong in managed identity and Secret Manager flows. The private signing key is generated at setup time, ignored by version control, and never printed.
+## Important boundaries
 
-## Least privilege
+`X-Gateway-Verified` is a classroom marker and forgeable on an untrusted network. Production must use authenticated ingress and TLS/mTLS. Demo client secrets and refresh tokens are committed for self-sufficiency; production credentials belong in Secret Manager and should be injected only into the MCP connector.
 
-The local policy allows only:
+The agents never receive a Zoho access or refresh token. The Zoho Inventory connector has only `items.READ`; the Procurement connector has purchase-order create/read/update scopes. Because Zoho's UPDATE scope can be broader than the business permission, the demo does not expose an approve tool and uses a separate human session. In production, also use a Zoho integration user/role that cannot approve its own requests where the account edition supports it.
 
-- Agent A -> Agent B with `inventory.read`
-- Agent B -> SAP with `records.read`
+Approval is bound to vendor, reference, line items, rates, quantities, and total. A mutation changes the hash and invalidates approval. Never treat a chat response, agent claim, or generic “approved” flag as transaction approval.
 
-There is no wildcard route and no direct Agent A -> SAP grant. The Cloud extension uses a project-level role for workshop simplicity; replace it with the narrowest resource-level binding available in your environment.
-
-## Cloud status
-
-Agent Identity, Agent Runtime A2A support, and related interfaces may be Preview and can change. Verify region availability, organization policy, SDK version, and current documentation before production adoption.
+Do not log authorization headers, access tokens, refresh tokens, or client secrets. Restrict outbound connector traffic to the correct Zoho data-center hostnames.

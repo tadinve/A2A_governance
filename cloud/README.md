@@ -64,7 +64,7 @@ For a production resource, replace `roles/browser` with the narrowest resource-l
 
 ## A2A continuation
 
-The root project demonstrates the full A2A call deterministically. To expose Agent B as a managed A2A endpoint and consume it with `RemoteA2aAgent`, follow Google's current [A2A Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime). The authorization rule is the same: the caller's ADC becomes its Agent Identity inside Agent Runtime, and IAM on the target decides whether that principal may invoke it.
+The root project demonstrates the full A2A call deterministically. To expose Procurement Agent as a managed A2A endpoint and consume it from Inventory Agent with `RemoteA2aAgent`, follow Google's current [A2A Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime). The authorization rule is the same: the caller's ADC becomes its Agent Identity inside Agent Runtime, and IAM on the target decides whether that principal may invoke it.
 
 ## Cleanup
 

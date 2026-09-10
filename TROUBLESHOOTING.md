@@ -1,29 +1,21 @@
 # Troubleshooting
 
-## A service does not start
+## A port is busy
 
-Run `bash scripts/stop_local.sh`, inspect `runtime/*.log`, then start again. Ports 8100–8105 must be free.
+Run `bash scripts/stop_local.sh`, inspect `runtime/*.log`, and start again. Ports 8100–8107 must be free.
 
-```bash
-ss -ltnp | grep -E ':810[0-5]'
-```
+## A service fails health checks
 
-## Python or dependency failure
+Run `tail -n 100 runtime/*.log`. Re-run `bash scripts/setup.sh` if the virtual environment is missing dependencies.
 
-Use Python 3.11 or newer and rerun `bash scripts/setup.sh`. The setup creates an isolated `.venv`.
+## A second run returns an existing PO
 
-## Token signature errors
+The emulator implements idempotent creation per request ID. Restart the services to reset its in-memory organization.
 
-Stop all services, delete only the generated files `runtime/issuer_private.pem` and `runtime/issuer_public.pem`, then rerun setup. All services must read the same key pair.
+## No local traces
 
-## No trace evidence
+Run the business flow first, then `bash scripts/show_evidence.sh`. Each service writes its own `evidence/*.spans.jsonl` file.
 
-Run the request first. Local spans are written under `evidence/*.spans.jsonl`. For Cloud Trace export, verify Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, `roles/cloudtrace.agent`, and `TRACE_EXPORTER=gcp` before starting services.
+## No Cloud Trace entries
 
-## `adk web` sessions are missing from Agent Platform
-
-This is expected unless ADK Web is configured to use the same persistent Agent Engine session service. Its local session store does not backfill the deployed agent's Sessions tab. Use Trace Explorer for exported OpenTelemetry spans, or invoke the deployed agent to create deployed-runtime sessions.
-
-## Cloud extension fails
-
-Check the exact SDK versions in `cloud/requirements.txt`, region support, APIs, staging bucket, billing, and organization policies. Agent Identity/A2A features may be Preview. Run `gcloud auth application-default login` in environments where browser-based ADC is appropriate.
+Confirm Application Default Credentials, `roles/cloudtrace.agent`, `GOOGLE_CLOUD_PROJECT`, and `TRACE_EXPORTER=gcp`. Cloud Trace export is independent of Agent Engine Sessions.

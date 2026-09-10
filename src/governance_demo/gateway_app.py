@@ -54,11 +54,14 @@ async def route(target: str, request: Request, authorization: str | None = Heade
         (
             item
             for item in load_json("policies.json")["gateway_routes"]
-            if item["actor"] == actor and item["target"] == target and item["effect"] == "allow"
+            if item["actor"] == actor
+            and item["target"] == target
+            and item["effect"] == "allow"
+            and item["required_scope"] in scopes(claims)
         ),
         None,
     )
-    if not policy or policy["required_scope"] not in scopes(claims):
+    if not policy:
         record("agent-gateway", "AUTHORIZATION_DENIED", actor=actor, target=target)
         raise HTTPException(403, "IAM-style route policy denied this agent-to-target relationship")
 

@@ -1,27 +1,31 @@
 {
   "agents": {
-    "agent-a": {
-      "display_name": "Inventory Orchestrator Agent A",
-      "owner": "Supply Chain AI Team",
-      "identity": "spiffe://demo.local/agents/agent-a",
+    "inventory-agent": {
+      "display_name": "Inventory Agent",
+      "owner": "Supply Chain Operations",
+      "identity": "spiffe://demo.local/agents/inventory-agent",
       "endpoint": "http://127.0.0.1:8103/ask",
-      "skills": ["inventory-orchestration"]
+      "skills": ["inventory-monitoring", "reorder-orchestration"]
     },
-    "agent-b": {
-      "display_name": "Inventory Specialist Agent B",
-      "owner": "ERP Integration Team",
-      "identity": "spiffe://demo.local/agents/agent-b",
+    "procurement-agent": {
+      "display_name": "Procurement Agent",
+      "owner": "Procurement Operations",
+      "identity": "spiffe://demo.local/agents/procurement-agent",
       "endpoint": "http://127.0.0.1:8104/a2a",
       "agent_card": "http://127.0.0.1:8104/.well-known/agent-card.json",
-      "skills": ["sap-inventory-lookup"]
+      "skills": ["purchase-order-drafting", "purchase-order-status"]
     }
   },
   "resources": {
-    "sap-api": {
-      "display_name": "SAP Inventory API Simulator",
-      "endpoint": "http://127.0.0.1:8105/inventory",
-      "required_scope": "records.read"
+    "zoho-inventory-mcp": {
+      "display_name": "Zoho Inventory Read MCP Server",
+      "endpoint": "http://127.0.0.1:8105/mcp",
+      "required_scope": "inventory.read"
+    },
+    "zoho-procurement-mcp": {
+      "display_name": "Zoho Procurement MCP Server",
+      "endpoint": "http://127.0.0.1:8106/mcp",
+      "required_scope": "purchaseorder.create or purchaseorder.read"
     }
   }
 }
-

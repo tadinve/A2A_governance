@@ -4,7 +4,7 @@ set -euo pipefail
 DEMO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DEMO_ROOT"
 
-for name in registry identity gateway agent-a agent-b sap; do
+for name in registry identity gateway inventory-agent procurement-agent inventory-mcp procurement-mcp zoho; do
   pid_file="runtime/$name.pid"
   if [[ -f "$pid_file" ]]; then
     pid="$(<"$pid_file")"
