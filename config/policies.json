@@ -1,0 +1,33 @@
+{
+  "gateway_routes": [
+    {
+      "actor": "agent-a",
+      "target": "agent-b",
+      "required_scope": "inventory.read",
+      "effect": "allow"
+    },
+    {
+      "actor": "agent-b",
+      "target": "sap-api",
+      "required_scope": "records.read",
+      "effect": "allow"
+    }
+  ],
+  "token_exchange": [
+    {
+      "actor": "agent-a",
+      "subject_audience": "agent-a",
+      "subject_scope": "assistant.inventory",
+      "target_audience": "agent-b",
+      "output_scope": "inventory.read"
+    },
+    {
+      "actor": "agent-b",
+      "subject_audience": "agent-b",
+      "subject_scope": "inventory.read",
+      "target_audience": "sap-api",
+      "output_scope": "records.read"
+    }
+  ]
+}
+

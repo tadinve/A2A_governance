@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+cloud/.venv/
+.pytest_cache/
+
+# Generated at setup time - the demo signing key must never be committed
+runtime/*.pem
+runtime/*.pid
+runtime/*.log
+
+# Generated at run time
+evidence/*.jsonl
+
+# OS
+.DS_Store

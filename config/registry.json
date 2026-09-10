@@ -1,0 +1,27 @@
+{
+  "agents": {
+    "agent-a": {
+      "display_name": "Inventory Orchestrator Agent A",
+      "owner": "Supply Chain AI Team",
+      "identity": "spiffe://demo.local/agents/agent-a",
+      "endpoint": "http://127.0.0.1:8103/ask",
+      "skills": ["inventory-orchestration"]
+    },
+    "agent-b": {
+      "display_name": "Inventory Specialist Agent B",
+      "owner": "ERP Integration Team",
+      "identity": "spiffe://demo.local/agents/agent-b",
+      "endpoint": "http://127.0.0.1:8104/a2a",
+      "agent_card": "http://127.0.0.1:8104/.well-known/agent-card.json",
+      "skills": ["sap-inventory-lookup"]
+    }
+  },
+  "resources": {
+    "sap-api": {
+      "display_name": "SAP Inventory API Simulator",
+      "endpoint": "http://127.0.0.1:8105/inventory",
+      "required_scope": "records.read"
+    }
+  }
+}
+

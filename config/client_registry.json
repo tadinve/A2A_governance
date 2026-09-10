@@ -1,0 +1,13 @@
+{
+  "agent-a": {
+    "client_secret": "agent-a-demo-secret",
+    "spiffe_id": "spiffe://demo.local/agents/agent-a",
+    "allowed_audiences": ["registry", "sts"]
+  },
+  "agent-b": {
+    "client_secret": "agent-b-demo-secret",
+    "spiffe_id": "spiffe://demo.local/agents/agent-b",
+    "allowed_audiences": ["sts"]
+  }
+}
+

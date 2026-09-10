@@ -1,0 +1,6 @@
+{
+  "CK-GPU-42": {"description": "CloudKarya GPU Controller", "quantity": 27, "warehouse": "WAW-01"},
+  "CK-SENSOR-7": {"description": "CloudKarya Thermal Sensor", "quantity": 104, "warehouse": "BLR-02"},
+  "CK-ROBOT-9": {"description": "CloudKarya Assembly Robot", "quantity": 3, "warehouse": "SJC-01"}
+}
+
