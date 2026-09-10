@@ -1,16 +1,14 @@
-# Demo signing key
+# Local development keys only
 
-**Not committed.** `issuer_private.pem` and `issuer_public.pem` are generated on
-your machine by `cloud/ensure_demo_keys.py`, which the deploy scripts run
-automatically, and are staged into each agent package at deploy time.
+**Not used by any deployment, and never committed.**
 
-Inventory Agent and Procurement Agent are separate Agent Runtime deployments in
-separate processes. They need the *same* issuer key to verify each other's
-delegated tokens; a per-process key would make cross-agent verification
-impossible.
+The shared delegation issuer key lives in **Secret Manager**
+(`a2a-demo-delegation-issuer`). Deployed agents fetch it at runtime with their
+own Agent Identity; nothing is packaged into the agent bundle. See
+`cloud/setup_issuer_secret.py`.
 
-This key signs the demo's own delegation JWTs. It is not a Google credential and
-grants no access to anything real. It is still not committed, because this
-repository is public and publishing a private key inside a demo about credential
-hygiene would set the wrong example. Production delegation would use a managed
-issuer with rotation, and the private key would live in Secret Manager.
+This directory exists only so the agent packages can be exercised offline,
+without Google Cloud. `cloud/ensure_demo_keys.py` writes a throwaway keypair
+here, and `governance.py` falls back to it when `ISSUER_SECRET_NAME` is unset.
+
+If you are deploying, you do not need this directory at all.

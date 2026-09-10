@@ -18,6 +18,7 @@ REQUIREMENTS = [
     "a2a-sdk[http-server]",
     "PyJWT>=2.8",
     "cryptography>=42",
+    "google-cloud-secret-manager>=2.20",
 ]
 
 
@@ -27,11 +28,6 @@ def main() -> int:
     bucket = os.environ.get("STAGING_BUCKET", f"gs://{project}-a2a-staging")
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from ensure_demo_keys import stage
-
-    print("Preparing the shared demo signing key...")
-    stage()
-
     from procurement_a2a import build_agent
 
     client = vertexai.Client(project=project, location=location)
@@ -46,6 +42,12 @@ def main() -> int:
         requirements=REQUIREMENTS,
         extra_packages=["./procurement_a2a"],
         identity_type="AGENT_IDENTITY",
+        env_vars={
+            # The issuer key is fetched at runtime with this agent's own Agent
+            # Identity. It is not packaged into the deployment.
+            "ISSUER_SECRET_NAME":
+                f"projects/{project}/secrets/a2a-demo-delegation-issuer/versions/latest",
+        },
     )
 
     agent = build_agent()

@@ -22,8 +22,8 @@ provision the identity at instance creation.
 `governance.py` is a self-contained copy of the delegation, policy, and
 draft-hash logic from `src/governance_demo/security.py`. Agent Runtime uploads
 only the agent folder, so the module is duplicated in each rather than imported,
-and `ensure_demo_keys.py` stages the shared signing key into each package at
-deploy time.
+and the shared signing key is fetched from Secret Manager at runtime rather
+than packaged in.
 The token exchange, the nested `act` chain, the policy denials, and the SHA-256
 approval binding all run for real in-process.
 
@@ -38,14 +38,16 @@ cloud/.venv/bin/python cloud/deploy_a2a.py   # Procurement Agent (A2A)
 bash cloud/deploy_agents.sh                  # Inventory + ADK Procurement
 ```
 
-Both paths generate the shared signing key if it is missing. The A2A agent
-deploys first so its resource name can be staged into Inventory's `.env`.
+Then provision the shared issuer key and grant the agents access to it:
 
-> **Key rotation is all-or-nothing.** Both agents must carry the *same* issuer
-> key. If `cloud/demo_keys/` is empty a new key is generated, so redeploy
-> **every** agent after that happens. Deploying only one leaves the pair holding
-> different keys, and Procurement Agent will reject Inventory Agent's delegated
-> tokens with a signature error that looks like a bug but is the check working.
+```bash
+cloud/.venv/bin/python cloud/setup_issuer_secret.py          # create + grant
+cloud/.venv/bin/python cloud/setup_issuer_secret.py --show   # inspect
+```
+
+Run this **after** the agents exist, because it grants access to their Agent
+Identity principals, which are only created at deployment. The A2A agent deploys
+first so its resource name can be staged into Inventory's `.env`.
 
 Re-running updates deployments in place rather than creating duplicates. Deploy
 one ADK agent at a time with `bash cloud/deploy_agents.sh inventory` or
@@ -194,6 +196,45 @@ python3 cloud/iam_binding.py \
 > **Presenting this live:** IAM changes take a few minutes to propagate. A
 > revoked binding kept returning 200 for about three minutes before flipping to
 > 403. Change the policy before the session, not during it.
+
+**3e. Where the signing key lives, and why that matters.**
+
+The delegation issuer key is held in **Secret Manager**, not packaged into
+either agent. At startup each agent calls:
+
+```python
+client = secretmanager.SecretManagerServiceClient()
+private = client.access_secret_version(name=ISSUER_SECRET_NAME).payload.data
+```
+
+Three things follow, and all three are the point:
+
+1. **No private key is distributed.** The deployment bundle contains no key
+   material, and none is committed. A repository or an image leak yields
+   nothing.
+2. **The fetch is itself an IAM decision.** The agent authenticates with its own
+   Agent Identity, and reads the secret only because
+   `roles/secretmanager.secretAccessor` is bound on **that one secret** for
+   **that one principal**. Revoke it and the agent starts up but cannot sign or
+   verify anything. It is the same authentication/authorization split as the A2A
+   hop, on a different resource type.
+3. **Rotation stops being a redeployment.** `--rotate` adds a new version and
+   both agents pick it up, because both read `versions/latest`. When the key was
+   packaged, rotating it meant redeploying every agent in lockstep or the pair
+   would hold different keys and reject each other's tokens.
+
+Access is scoped deliberately. `setup_issuer_secret.py` grants only to the three
+agents that participate in the delegation chain. Other agents in the same
+project, with perfectly valid Agent Identities, are not granted and cannot read
+it -- granting to "every agent we can see" is the over-broad binding this demo
+argues against.
+
+The public key is **derived** from the private key rather than stored
+separately, so the pair cannot drift apart.
+
+For production, this is the shape to keep: Secret Manager or KMS, or a managed
+issuer such as Agent Identity auth manager. What it replaces -- a private key
+copied into every agent deployment -- is the anti-pattern.
 
 **4. Ask Inventory Agent to create the purchase order itself.**
 

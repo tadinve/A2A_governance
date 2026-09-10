@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,58 @@ import jwt
 ISSUER = "https://identity.demo.local"
 ALGORITHM = "RS256"
 
-# A fixed committed demo keypair, so two separately deployed agents can verify
-# each other's delegated tokens. Generating one per process would make
-# cross-agent verification impossible. See demo_keys/README.md.
-_KEY_DIR = Path(__file__).resolve().parent / "demo_keys"
-_PRIVATE = (_KEY_DIR / "issuer_private.pem").read_bytes()
-_PUBLIC = (_KEY_DIR / "issuer_public.pem").read_bytes()
+class IssuerKeyUnavailable(Exception):
+    """Raised when the shared issuer key cannot be fetched."""
+
+
+def _load_issuer_key() -> tuple[bytes, bytes]:
+    """Fetch the shared delegation issuer key.
+
+    Two separately deployed agents must sign and verify with the *same* key, so
+    it lives in Secret Manager rather than being packaged into either
+    deployment. The agent reads it using its own Agent Identity, and can only do
+    so because an IAM binding on that secret permits it -- the same
+    authentication/authorization split as the A2A hop, on a different resource.
+
+    Falls back to a local file only for offline development.
+    """
+    secret_name = os.getenv("ISSUER_SECRET_NAME", "")
+    if secret_name:
+        # The client library performs the mTLS binding that a certificate-bound
+        # Agent Identity token requires. A raw bearer request would get 401.
+        from google.cloud import secretmanager
+
+        client = secretmanager.SecretManagerServiceClient()
+        private = client.access_secret_version(name=secret_name).payload.data
+    else:
+        local = Path(__file__).resolve().parent / "demo_keys" / "issuer_private.pem"
+        if not local.exists():
+            raise IssuerKeyUnavailable(
+                "No ISSUER_SECRET_NAME set and no local demo_keys/issuer_private.pem. "
+                "Run cloud/setup_issuer_secret.py, or cloud/ensure_demo_keys.py for "
+                "offline development.")
+        private = local.read_bytes()
+
+    # Derive the public key rather than storing it separately: one secret, and
+    # the pair can never drift apart.
+    from cryptography.hazmat.primitives import serialization
+
+    loaded = serialization.load_pem_private_key(private, password=None)
+    public = loaded.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return private, public
+
+
+# Loaded lazily and cached: importing an agent must not require the secret, so
+# the module stays importable for packaging, tests, and offline inspection.
+_KEYS: tuple[bytes, bytes] | None = None
+
+
+def _keys() -> tuple[bytes, bytes]:
+    global _KEYS
+    if _KEYS is None:
+        _KEYS = _load_issuer_key()
+    return _KEYS
 
 
 class PolicyDenied(Exception):
@@ -40,11 +87,11 @@ def issue_token(*, subject: str, audience: str, scopes: list[str], token_kind: s
     }
     if actor_chain:
         claims["act"] = actor_chain
-    return jwt.encode(claims, _PRIVATE, algorithm=ALGORITHM)
+    return jwt.encode(claims, _keys()[0], algorithm=ALGORITHM)
 
 
 def decode_token(token: str, audience: str | None = None) -> dict[str, Any]:
-    return jwt.decode(token, _PUBLIC, algorithms=[ALGORITHM], audience=audience,
+    return jwt.decode(token, _keys()[1], algorithms=[ALGORITHM], audience=audience,
                       issuer=ISSUER, options={"verify_aud": audience is not None})
 
 
