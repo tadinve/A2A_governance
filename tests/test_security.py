@@ -11,7 +11,7 @@ def test_audience_and_scope_are_enforced():
     assert claims["sub"] == "inventory-agent"
     assert scopes(claims) == {"registry.read"}
     with pytest.raises(Exception):
-        decode_token(token, audience="sap-api")
+        decode_token(token, audience="zoho-inventory-mcp")
 
 
 def test_nested_actor_chain_preserves_delegation():

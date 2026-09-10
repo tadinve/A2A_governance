@@ -14,8 +14,8 @@ The package needs only Python 3.11+, Bash, and `curl`. It uses signed RS256 JWTs
 ## Five-minute demo
 
 ```bash
-unzip agent-identity-a2a-governance-demo.zip
-cd agent-identity-a2a-demo
+git clone git@github.com:tadinve/A2A_governance.git
+cd A2A_governance
 bash scripts/setup.sh
 bash scripts/verify.sh
 ```
@@ -54,6 +54,7 @@ Swagger UI is at `http://127.0.0.1:PORT/docs` while running.
 - [SECURITY_NOTES.md](SECURITY_NOTES.md): production mapping and caveats
 - [ADK_WEB_AND_TRACES.md](ADK_WEB_AND_TRACES.md): sessions versus Cloud Trace
 - [cloud/README.md](cloud/README.md): actual Google Cloud Agent Identity extension
+- [cloud/DEPLOYED_AGENTS.md](cloud/DEPLOYED_AGENTS.md): deploy both agents to Agent Runtime with real identities
 
 ## Trace export
 
