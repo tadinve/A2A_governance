@@ -57,6 +57,11 @@ ADK="$CLOUD_ROOT/.venv/bin/adk"
 # only the key's resource name and the Auth Broker's URL -- never key material.
 KMS_SIGNING_KEY="${KMS_SIGNING_KEY:-}"
 AUTH_BROKER_URL="${AUTH_BROKER_URL:-}"
+# Explicit reorder policy. Zoho stores reorder_level but no target stock, so the
+# order quantity is configuration, not inventory data.
+ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
+DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
+ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\":100,\"min_order_quantity\":1}}}"
 if [[ -z "$KMS_SIGNING_KEY" ]]; then
   info "KMS_SIGNING_KEY is unset; run cloud/setup_kms_signing.py and export it"
 fi
@@ -110,6 +115,10 @@ if [[ "$ONLY" == "both" || "$ONLY" == "inventory" ]]; then
     echo "GOOGLE_CLOUD_LOCATION=$REGION"
     echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
     echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
+    echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+    echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
+    echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
+    echo "DEMO_SKU=$DEMO_SKU"
   } > "$STAGED"
   info "staged PROCUREMENT_A2A and the KMS key name into the upload (no key material)"
   deploy_agent inventory_agent "Inventory Agent"

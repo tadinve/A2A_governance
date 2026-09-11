@@ -1,0 +1,8 @@
+# Build the Auth Broker image from the repo root, using the broker's Dockerfile.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "cloud/auth_broker/Dockerfile", "-t", "${_IMAGE}", "."]
+images:
+  - "${_IMAGE}"
+options:
+  logging: CLOUD_LOGGING_ONLY

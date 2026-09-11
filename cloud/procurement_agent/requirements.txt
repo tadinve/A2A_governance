@@ -3,3 +3,4 @@ google-adk[gcp,otel-gcp]==2.6.0
 PyJWT>=2.8
 cryptography>=42
 google-cloud-secret-manager>=2.20
+google-cloud-kms>=3.0

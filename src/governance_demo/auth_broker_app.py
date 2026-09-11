@@ -16,6 +16,7 @@ public key so verifiers need no shared secret and no key distribution step.
 from __future__ import annotations
 
 import base64
+import os
 import secrets
 import time
 from typing import Any
@@ -49,18 +50,132 @@ class SignRequest(BaseModel):
     lifetime_seconds: int = 300
 
 
+def _unverified_claims(token: str) -> dict:
+    """Decode claims WITHOUT verifying, for diagnostics only.
+
+    Never used to authorize. It exists so a verification failure reports which
+    issuer and subject were actually presented, instead of a bare 401 that
+    leaves an operator guessing.
+    """
+    try:
+        import base64 as _b64
+        import json as _json
+
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return _json.loads(_b64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+
+_jwks_clients: dict[str, Any] = {}
+
+
+def _pool_jwks_uri(issuer: str) -> str:
+    """Discover a workload identity pool's JWKS endpoint via OIDC discovery."""
+    import httpx
+
+    document = httpx.get(f"{issuer.rstrip('/')}/.well-known/openid-configuration",
+                         timeout=15).json()
+    return document["jwks_uri"]
+
+
+def _verify_google_identity(token: str) -> dict | None:
+    """Verify a caller's ID token and return its claims.
+
+    Two issuers matter here, and they need different verification paths:
+
+    * ordinary Google ID tokens (service accounts, users), verified against
+      Google's OAuth certificates;
+    * Agent Identity tokens, which Agent Runtime issues through the
+      organization's workload identity pool. Their ``iss`` is an STS pool URL
+      and their ``sub`` is a SPIFFE ID, so Google's standard certificates do
+      not contain the signing key. Those are verified against the pool's own
+      JWKS, discovered from the issuer.
+
+    Cloud Run has already enforced roles/run.invoker before the request lands.
+    Verifying again here is what turns "admitted" into "this specific agent",
+    which is the identity the minting allowlist is checked against.
+    """
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+
+    audience = os.getenv("AUTH_BROKER_AUDIENCE", "").strip() or None
+    seen = _unverified_claims(token)
+    issuer = str(seen.get("iss", ""))
+    failures = []
+
+    if issuer.startswith("https://sts.googleapis.com/"):
+        try:
+            import jwt as pyjwt
+
+            if issuer not in _jwks_clients:
+                _jwks_clients[issuer] = pyjwt.PyJWKClient(_pool_jwks_uri(issuer))
+            signing_key = _jwks_clients[issuer].get_signing_key_from_jwt(token)
+            return pyjwt.decode(
+                token, signing_key.key, algorithms=["RS256"],
+                audience=audience, issuer=issuer,
+                options={"verify_aud": audience is not None},
+            )
+        except Exception as exc:
+            failures.append(f"workload_identity_pool:{type(exc).__name__}:{str(exc)[:140]}")
+    else:
+        request = google_requests.Request()
+        for label, kwargs in (("with_audience", {"audience": audience} if audience else None),
+                              ("no_audience", {})):
+            if kwargs is None:
+                continue
+            try:
+                return google_id_token.verify_token(token, request, **kwargs)
+            except Exception as exc:
+                failures.append(f"{label}:{type(exc).__name__}:{str(exc)[:120]}")
+
+    record("auth-broker", "BROKER_TOKEN_VERIFY_FAILED",
+           failures=failures,
+           unverified_iss=seen.get("iss"),
+           unverified_aud=seen.get("aud"),
+           unverified_sub=seen.get("sub"),
+           unverified_claim_names=sorted(seen.keys()))
+    return None
+
+
 def _authenticate_caller(authorization: str | None) -> tuple[str, dict]:
-    """Only registered broker clients may ask for a signature."""
+    """Identify the caller, by Google identity in cloud or Basic locally."""
     scheme, value = get_authorization_scheme_param(authorization or "")
+    clients = load_json("broker_clients.json")
+
+    if scheme.lower() == "bearer" and value:
+        claims = _verify_google_identity(value)
+        if not claims:
+            raise HTTPException(401, "ID token failed verification")
+        # Agent Identity and service accounts surface under different claims.
+        presented = {str(claims.get(field)) for field in ("email", "sub", "azp")
+                     if claims.get(field)}
+        for client_id, client in clients.items():
+            allowed = set(client.get("allowed_principals", []))
+            if allowed & presented:
+                matched = sorted(allowed & presented)[0]
+                record("auth-broker", "BROKER_CALLER_AUTHENTICATED",
+                       minter=client_id, method="google_id_token", principal=matched)
+                return client_id, client
+        record("auth-broker", "BROKER_CALLER_REJECTED", method="google_id_token",
+               presented=sorted(presented),
+               reason="verified identity is not an allowed minter")
+        raise HTTPException(
+            403, f"Verified identity is not an allowed minter: {sorted(presented)}")
+
     if scheme.lower() != "basic" or not value:
-        raise HTTPException(401, "Broker clients must authenticate with HTTP Basic")
+        raise HTTPException(
+            401, "Authenticate with a Google ID token (Bearer) or broker client Basic auth")
     try:
         client_id, client_secret = base64.b64decode(value).decode().split(":", 1)
     except Exception as exc:
         raise HTTPException(401, "Invalid broker client authentication") from exc
-    client = load_json("broker_clients.json").get(client_id)
-    if not client or not secrets.compare_digest(client["client_secret"], client_secret):
+    client = clients.get(client_id)
+    if not client or not secrets.compare_digest(client.get("client_secret", ""), client_secret):
         raise HTTPException(401, "Invalid broker client credentials")
+    if client.get("basic_auth_enabled") is False:
+        raise HTTPException(403, f"{client_id} may not use Basic auth in this deployment")
     return client_id, client
 
 

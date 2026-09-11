@@ -136,6 +136,52 @@
         "purchaseorder.read"
       ],
       "max_lifetime_seconds": 300
+    },
+    {
+      "minter": "agent-runtime",
+      "token_kind": "user_access_token",
+      "audiences": [
+        "inventory-agent"
+      ],
+      "allowed_scopes": [
+        "assistant.inventory"
+      ],
+      "max_lifetime_seconds": 900
+    },
+    {
+      "minter": "agent-runtime",
+      "token_kind": "delegated_access_token",
+      "audiences": [
+        "zoho-inventory-mcp"
+      ],
+      "allowed_scopes": [
+        "inventory.read"
+      ],
+      "max_lifetime_seconds": 300
+    },
+    {
+      "minter": "agent-runtime",
+      "token_kind": "delegated_access_token",
+      "audiences": [
+        "procurement-agent"
+      ],
+      "allowed_scopes": [
+        "purchase.request",
+        "purchase.status"
+      ],
+      "max_lifetime_seconds": 300
+    },
+    {
+      "minter": "agent-runtime",
+      "token_kind": "delegated_access_token",
+      "audiences": [
+        "zoho-procurement-mcp"
+      ],
+      "allowed_scopes": [
+        "purchaseorder.create",
+        "purchaseorder.read"
+      ],
+      "max_lifetime_seconds": 300
     }
   ]
 }

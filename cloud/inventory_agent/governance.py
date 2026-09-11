@@ -77,6 +77,42 @@ class PolicyDenied(Exception):
     """Raised when no delegation policy permits a requested exchange."""
 
 
+def _broker_identity_token(audience: str) -> tuple[str, str]:
+    """Mint a Google ID token for the Auth Broker, reporting how we got it.
+
+    Agent Identity credentials are certificate-bound, so the strategies differ
+    in whether they can be presented to a plain Cloud Run endpoint. Each is
+    tried in turn and the one that worked is reported, because "which
+    credential type reached the broker" is exactly what we need in the logs
+    when this fails.
+    """
+    errors = []
+    try:
+        import google.auth.transport.requests
+        from google.oauth2 import id_token as google_id_token
+
+        request = google.auth.transport.requests.Request()
+        return google_id_token.fetch_id_token(request, audience), "fetch_id_token"
+    except Exception as exc:
+        errors.append(f"fetch_id_token: {type(exc).__name__}")
+
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        credentials, _ = google.auth.default()
+        if hasattr(credentials, "with_target_audience"):
+            scoped = credentials.with_target_audience(audience)
+            scoped.refresh(google.auth.transport.requests.Request())
+            return scoped.token, "with_target_audience"
+        errors.append("with_target_audience: unsupported credential type")
+    except Exception as exc:
+        errors.append(f"with_target_audience: {type(exc).__name__}")
+
+    raise SigningUnavailable(
+        "Could not obtain an ID token for the Auth Broker: " + "; ".join(errors))
+
+
 def request_token(*, subject: str, audience: str, scopes: list[str], token_kind: str,
                   actor_chain: dict[str, Any] | None = None,
                   lifetime_seconds: int = 300) -> str:
@@ -90,27 +126,27 @@ def request_token(*, subject: str, audience: str, scopes: list[str], token_kind:
             "Set AUTH_BROKER_URL. Deployed agents do not sign their own tokens; "
             "only the Auth Broker can call KMS asymmetricSign."
         )
-    import base64
-    import urllib.error
-    import urllib.request
+    import requests as _requests
 
-    payload = json.dumps({
+    payload = {
         "subject": subject, "audience": audience, "scopes": scopes,
         "token_kind": token_kind, "actor_chain": actor_chain,
         "lifetime_seconds": lifetime_seconds,
-    }).encode()
-    credentials = base64.b64encode(
-        f"{BROKER_CLIENT_ID}:{BROKER_CLIENT_SECRET}".encode()).decode()
-    request = urllib.request.Request(
-        f"{AUTH_BROKER_URL}/sign", data=payload, method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Basic {credentials}"})
+    }
+    id_token_value, method = _broker_identity_token(AUTH_BROKER_URL)
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read())["token"]
-    except urllib.error.HTTPError as exc:
+        response = _requests.post(
+            f"{AUTH_BROKER_URL}/sign", json=payload, timeout=60,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {id_token_value}"})
+    except Exception as exc:
         raise SigningUnavailable(
-            f"Auth Broker refused to mint this token: HTTP {exc.code}") from exc
+            f"Auth Broker unreachable via {method}: {type(exc).__name__}") from None
+    if response.status_code != 200:
+        raise SigningUnavailable(
+            f"Auth Broker refused to mint this token (auth via {method}): "
+            f"HTTP {response.status_code} {response.text[:200]}")
+    return response.json()["token"]
 
 
 def decode_token(token: str, audience: str | None = None) -> dict[str, Any]:

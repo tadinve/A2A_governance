@@ -20,6 +20,7 @@ REQUIREMENTS = [
     "cryptography>=42",
     "google-cloud-secret-manager>=2.20",
     "requests>=2.31",
+    "google-cloud-kms>=3.0",
 ]
 
 

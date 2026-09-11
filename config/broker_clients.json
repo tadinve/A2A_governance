@@ -2,6 +2,32 @@
   "identity-broker": {
     "client_secret": "identity-broker-demo-secret",
     "principal": "spiffe://demo.local/services/identity-broker",
-    "may_mint": ["user_access_token", "agent_credential", "delegated_access_token"]
+    "may_mint": [
+      "user_access_token",
+      "agent_credential",
+      "delegated_access_token"
+    ]
+  },
+  "agent-runtime": {
+    "description": "Deployed Agent Runtime agents, authenticated by Agent Identity and admitted by roles/run.invoker on the broker service.",
+    "allowed_principals": [
+      "1882730593880375296",
+      "2745873609963601920",
+      "3222129270558031872",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872"
+    ],
+    "may_mint": [
+      "user_access_token",
+      "delegated_access_token"
+    ],
+    "basic_auth_enabled": false
   }
 }
