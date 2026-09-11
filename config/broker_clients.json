@@ -1,0 +1,7 @@
+{
+  "identity-broker": {
+    "client_secret": "identity-broker-demo-secret",
+    "principal": "spiffe://demo.local/services/identity-broker",
+    "may_mint": ["user_access_token", "agent_credential", "delegated_access_token"]
+  }
+}

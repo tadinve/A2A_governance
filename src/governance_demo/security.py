@@ -1,25 +1,33 @@
 from __future__ import annotations
 
-import time
+import base64
 from typing import Any
 
+import httpx
 import jwt
 
-from .settings import ISSUER, RUNTIME_DIR
+from .settings import AUTH_BROKER_URL, BROKER_CLIENT_ID, BROKER_CLIENT_SECRET, ISSUER
 
 
 ALGORITHM = "RS256"
 
-
-def _private_key() -> bytes:
-    return (RUNTIME_DIR / "issuer_private.pem").read_bytes()
-
-
-def _public_key() -> bytes:
-    return (RUNTIME_DIR / "issuer_public.pem").read_bytes()
+# Cached copy of the Auth Broker's public key. Verification is a hot path and the
+# key changes only on rotation, so we fetch lazily and refresh on a signature
+# failure rather than calling the broker on every request.
+_verification_key: dict[str, Any] = {}
 
 
-def issue_token(
+def _fetch_verification_key(force_refresh: bool = False) -> bytes:
+    if force_refresh or "pem" not in _verification_key:
+        response = httpx.get(f"{AUTH_BROKER_URL}/jwks", timeout=10)
+        response.raise_for_status()
+        published = response.json()
+        _verification_key["pem"] = published["public_key_pem"].encode()
+        _verification_key["kid"] = published["kid"]
+    return _verification_key["pem"]
+
+
+def request_token(
     *,
     subject: str,
     audience: str,
@@ -28,32 +36,59 @@ def issue_token(
     actor_chain: dict[str, Any] | None = None,
     lifetime_seconds: int = 300,
 ) -> str:
-    now = int(time.time())
-    claims: dict[str, Any] = {
-        "iss": ISSUER,
-        "sub": subject,
-        "aud": audience,
-        "iat": now,
-        "nbf": now,
-        "exp": now + lifetime_seconds,
-        "scope": " ".join(scopes),
-        "token_kind": token_kind,
-    }
-    if actor_chain:
-        claims["act"] = actor_chain
-    return jwt.encode(claims, _private_key(), algorithm=ALGORITHM)
+    """Ask the Auth Broker to mint a token.
+
+    This is the only way to obtain a signed token. There is deliberately no
+    local signing path: no caller of this module holds key material, so a
+    compromised service can request what the broker's minting policy allows it
+    and cannot forge anything else.
+    """
+    credentials = base64.b64encode(
+        f"{BROKER_CLIENT_ID}:{BROKER_CLIENT_SECRET}".encode()
+    ).decode()
+    response = httpx.post(
+        f"{AUTH_BROKER_URL}/sign",
+        json={
+            "subject": subject,
+            "audience": audience,
+            "scopes": scopes,
+            "token_kind": token_kind,
+            "actor_chain": actor_chain,
+            "lifetime_seconds": lifetime_seconds,
+        },
+        headers={"Authorization": f"Basic {credentials}"},
+        timeout=15,
+    )
+    if response.status_code != 200:
+        raise PermissionError(
+            f"Auth Broker refused to mint this token: HTTP {response.status_code}"
+        )
+    return response.json()["token"]
 
 
 def decode_token(token: str, audience: str | None = None) -> dict[str, Any]:
+    """Verify a token against the Auth Broker's published public key."""
     options = {"verify_aud": audience is not None}
-    return jwt.decode(
-        token,
-        _public_key(),
-        algorithms=[ALGORITHM],
-        audience=audience,
-        issuer=ISSUER,
-        options=options,
-    )
+    try:
+        return jwt.decode(
+            token,
+            _fetch_verification_key(),
+            algorithms=[ALGORITHM],
+            audience=audience,
+            issuer=ISSUER,
+            options=options,
+        )
+    except jwt.InvalidSignatureError:
+        # Either the key rotated under us or the token is forged. Refresh once;
+        # if it still fails the exception propagates and the caller denies.
+        return jwt.decode(
+            token,
+            _fetch_verification_key(force_refresh=True),
+            algorithms=[ALGORITHM],
+            audience=audience,
+            issuer=ISSUER,
+            options=options,
+        )
 
 
 def bearer_token(value: str | None) -> str:
@@ -91,4 +126,3 @@ def public_claims(claims: dict[str, Any]) -> dict[str, Any]:
         for key in ("iss", "sub", "aud", "scope", "token_kind", "act", "iat", "exp")
         if key in claims
     }
-

@@ -36,13 +36,14 @@ Raw bearer credentials are never printed. The script also proves that direct cal
 | Port | Component | Responsibility |
 |---:|---|---|
 | 8100 | Agent Registry | Agent discovery metadata |
-| 8101 | Identity Broker/Auth Manager | Human token, agent credentials, delegated tokens |
+| 8101 | Identity Broker/Auth Manager | Authenticates clients and decides which delegations are permitted |
 | 8102 | Agent Gateway | Audience, actor, scope, route, and content enforcement |
 | 8103 | Inventory Agent | Checks stock and orchestrates reorder |
 | 8104 | Procurement Agent | Owns PO drafting and status capabilities |
 | 8105 | Zoho Inventory MCP | Exposes only `get_inventory` |
 | 8106 | Zoho Procurement MCP | Exposes create-draft and status tools; never approve |
 | 8107 | Zoho Inventory Emulator | OAuth server, inventory/PO API, and human approval UI API |
+| 8108 | Auth Broker | Holds the delegation signing key and is the only component that can sign |
 
 Swagger UI is at `http://127.0.0.1:PORT/docs` while running.
 

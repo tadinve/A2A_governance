@@ -7,7 +7,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from opentelemetry import trace
 
 from .audit import record
-from .security import decode_token, extend_actor_chain, issue_token, public_claims, scopes
+from .security import decode_token, extend_actor_chain, public_claims, request_token, scopes
 from .settings import load_json
 from .telemetry import instrument_fastapi
 
@@ -43,7 +43,7 @@ def login(user_id: str = Form("venkatesh")) -> dict:
     """Simulate Cloud Identity sign-in; no password because this is a closed demo."""
     with tracer.start_as_current_span("identity.user_login") as span:
         span.set_attribute("enduser.id", user_id)
-        token = issue_token(
+        token = request_token(
             subject=user_id,
             audience="inventory-agent",
             scopes=["assistant.inventory"],
@@ -70,7 +70,7 @@ def oauth_token(
     if grant_type == "client_credentials":
         if audience not in client["allowed_audiences"]:
             raise HTTPException(403, "Client is not allowed to request this audience")
-        token = issue_token(
+        token = request_token(
             subject=client_id,
             audience=audience,
             scopes=scope.split(),
@@ -135,7 +135,7 @@ def oauth_token(
         span.set_attribute("auth.subject", subject_claims["sub"])
         span.set_attribute("auth.audience", audience)
         span.set_attribute("auth.scope", scope)
-        delegated = issue_token(
+        delegated = request_token(
             subject=subject_claims["sub"],
             audience=audience,
             scopes=scope.split(),

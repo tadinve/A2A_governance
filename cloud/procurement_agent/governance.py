@@ -20,78 +20,99 @@ ISSUER = "https://identity.demo.local"
 ALGORITHM = "RS256"
 
 class IssuerKeyUnavailable(Exception):
-    """Raised when the shared issuer key cannot be fetched."""
+    """Raised when the delegation public key cannot be fetched."""
 
 
-def _load_issuer_key() -> tuple[bytes, bytes]:
-    """Fetch the shared delegation issuer key.
+class SigningUnavailable(Exception):
+    """Raised when the Auth Broker will not mint a requested token."""
 
-    Two separately deployed agents must sign and verify with the *same* key, so
-    it lives in Secret Manager rather than being packaged into either
-    deployment. The agent reads it using its own Agent Identity, and can only do
-    so because an IAM binding on that secret permits it -- the same
-    authentication/authorization split as the A2A hop, on a different resource.
 
-    Falls back to a local file only for offline development.
+AUTH_BROKER_URL = os.getenv("AUTH_BROKER_URL", "").rstrip("/")
+KMS_SIGNING_KEY = os.getenv("KMS_SIGNING_KEY", "")
+BROKER_CLIENT_ID = os.getenv("BROKER_CLIENT_ID", "")
+BROKER_CLIENT_SECRET = os.getenv("BROKER_CLIENT_SECRET", "")
+
+
+def _load_verification_key() -> bytes:
+    """Fetch the *public* half of the delegation signing key.
+
+    Verification never needs private key material. With a KMS-backed key the
+    public half is readable with roles/cloudkms.publicKeyViewer, a strictly
+    weaker grant than the roles/cloudkms.signerVerifier the Auth Broker holds.
+    That is what lets Procurement Agent check a token while remaining unable to
+    mint one -- the property the old shared-secret design could not express,
+    because possession of the key granted both.
     """
-    secret_name = os.getenv("ISSUER_SECRET_NAME", "")
-    if secret_name:
-        # The client library performs the mTLS binding that a certificate-bound
-        # Agent Identity token requires. A raw bearer request would get 401.
-        from google.cloud import secretmanager
+    if KMS_SIGNING_KEY:
+        from google.cloud import kms
 
-        client = secretmanager.SecretManagerServiceClient()
-        private = client.access_secret_version(name=secret_name).payload.data
-    else:
-        local = Path(__file__).resolve().parent / "demo_keys" / "issuer_private.pem"
-        if not local.exists():
-            raise IssuerKeyUnavailable(
-                "No ISSUER_SECRET_NAME set and no local demo_keys/issuer_private.pem. "
-                "Run cloud/setup_issuer_secret.py, or cloud/ensure_demo_keys.py for "
-                "offline development.")
-        private = local.read_bytes()
+        client = kms.KeyManagementServiceClient()
+        return client.get_public_key(request={"name": KMS_SIGNING_KEY}).pem.encode()
+    if AUTH_BROKER_URL:
+        import urllib.request
 
-    # Derive the public key rather than storing it separately: one secret, and
-    # the pair can never drift apart.
-    from cryptography.hazmat.primitives import serialization
-
-    loaded = serialization.load_pem_private_key(private, password=None)
-    public = loaded.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-    return private, public
+        with urllib.request.urlopen(f"{AUTH_BROKER_URL}/jwks", timeout=15) as response:
+            return json.loads(response.read())["public_key_pem"].encode()
+    raise IssuerKeyUnavailable(
+        "Set KMS_SIGNING_KEY (preferred) or AUTH_BROKER_URL so this agent can fetch "
+        "the delegation public key. Create the key with cloud/setup_kms_signing.py."
+    )
 
 
-# Loaded lazily and cached: importing an agent must not require the secret, so
-# the module stays importable for packaging, tests, and offline inspection.
-_KEYS: tuple[bytes, bytes] | None = None
+# Loaded lazily and cached: importing an agent must not require network access,
+# so the module stays importable for packaging, tests, and offline inspection.
+_PUBLIC_KEY: bytes | None = None
 
 
-def _keys() -> tuple[bytes, bytes]:
-    global _KEYS
-    if _KEYS is None:
-        _KEYS = _load_issuer_key()
-    return _KEYS
+def _public_key() -> bytes:
+    global _PUBLIC_KEY
+    if _PUBLIC_KEY is None:
+        _PUBLIC_KEY = _load_verification_key()
+    return _PUBLIC_KEY
 
 
 class PolicyDenied(Exception):
     """Raised when no delegation policy permits a requested exchange."""
 
 
-def issue_token(*, subject: str, audience: str, scopes: list[str], token_kind: str,
-                actor_chain: dict[str, Any] | None = None, lifetime_seconds: int = 300) -> str:
-    now = int(time.time())
-    claims: dict[str, Any] = {
-        "iss": ISSUER, "sub": subject, "aud": audience,
-        "iat": now, "nbf": now, "exp": now + lifetime_seconds,
-        "scope": " ".join(scopes), "token_kind": token_kind,
-    }
-    if actor_chain:
-        claims["act"] = actor_chain
-    return jwt.encode(claims, _keys()[0], algorithm=ALGORITHM)
+def request_token(*, subject: str, audience: str, scopes: list[str], token_kind: str,
+                  actor_chain: dict[str, Any] | None = None,
+                  lifetime_seconds: int = 300) -> str:
+    """Ask the Auth Broker to sign a token. This agent holds no signing key.
+
+    The broker re-checks its own minting policy, so a compromised agent can
+    obtain only what policy already allows it and cannot forge anything else.
+    """
+    if not AUTH_BROKER_URL:
+        raise SigningUnavailable(
+            "Set AUTH_BROKER_URL. Deployed agents do not sign their own tokens; "
+            "only the Auth Broker can call KMS asymmetricSign."
+        )
+    import base64
+    import urllib.error
+    import urllib.request
+
+    payload = json.dumps({
+        "subject": subject, "audience": audience, "scopes": scopes,
+        "token_kind": token_kind, "actor_chain": actor_chain,
+        "lifetime_seconds": lifetime_seconds,
+    }).encode()
+    credentials = base64.b64encode(
+        f"{BROKER_CLIENT_ID}:{BROKER_CLIENT_SECRET}".encode()).decode()
+    request = urllib.request.Request(
+        f"{AUTH_BROKER_URL}/sign", data=payload, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Basic {credentials}"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read())["token"]
+    except urllib.error.HTTPError as exc:
+        raise SigningUnavailable(
+            f"Auth Broker refused to mint this token: HTTP {exc.code}") from exc
 
 
 def decode_token(token: str, audience: str | None = None) -> dict[str, Any]:
-    return jwt.decode(token, _keys()[1], algorithms=[ALGORITHM], audience=audience,
+    return jwt.decode(token, _public_key(), algorithms=[ALGORITHM], audience=audience,
                       issuer=ISSUER, options={"verify_aud": audience is not None})
 
 
@@ -149,7 +170,7 @@ def exchange_token(actor: str, subject_token: str, target_audience: str, scope: 
             f"'{target_audience}'. This is the same denial the local Identity "
             f"Broker returns with HTTP 403."
         )
-    delegated = issue_token(subject=subject_claims["sub"], audience=target_audience,
+    delegated = request_token(subject=subject_claims["sub"], audience=target_audience,
                             scopes=scope.split(), token_kind="delegated_access_token",
                             actor_chain=extend_actor_chain(actor, subject_claims))
     return {"access_token": delegated, "claims": public_claims(decode_token(delegated, audience=target_audience))}
@@ -157,7 +178,7 @@ def exchange_token(actor: str, subject_token: str, target_audience: str, scope: 
 
 def human_token(user_id: str = "demo-user") -> str:
     """The human sign-in that starts every delegation chain."""
-    return issue_token(subject=user_id, audience="inventory-agent",
+    return request_token(subject=user_id, audience="inventory-agent",
                        scopes=["assistant.inventory"], token_kind="user_access_token",
                        lifetime_seconds=900)
 

@@ -43,10 +43,11 @@ def main() -> int:
         extra_packages=["./procurement_a2a"],
         identity_type="AGENT_IDENTITY",
         env_vars={
-            # The issuer key is fetched at runtime with this agent's own Agent
-            # Identity. It is not packaged into the deployment.
-            "ISSUER_SECRET_NAME":
-                f"projects/{project}/secrets/a2a-demo-delegation-issuer/versions/latest",
+            # Only the *public* key name. This agent verifies delegation tokens
+            # with roles/cloudkms.publicKeyViewer and cannot sign: the private
+            # half is non-exportable and only the Auth Broker may invoke it.
+            "KMS_SIGNING_KEY": os.environ.get("KMS_SIGNING_KEY", ""),
+            "AUTH_BROKER_URL": os.environ.get("AUTH_BROKER_URL", ""),
         },
     )
 

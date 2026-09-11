@@ -2,7 +2,7 @@
 
 ## A port is busy
 
-Run `bash scripts/stop_local.sh`, inspect `runtime/*.log`, and start again. Ports 8100–8107 must be free.
+Run `bash scripts/stop_local.sh`, inspect `runtime/*.log`, and start again. Ports 8100–8108 must be free.
 
 ## A service fails health checks
 

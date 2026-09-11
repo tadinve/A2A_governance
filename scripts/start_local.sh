@@ -13,6 +13,7 @@ fi
 export PYTHONPATH="$DEMO_ROOT/src"
 
 services=(
+  "auth_broker_app:8108:auth-broker"
   "registry_app:8100:registry"
   "idp_app:8101:identity"
   "gateway_app:8102:gateway"
@@ -34,7 +35,7 @@ for spec in "${services[@]}"; do
   echo $! >"runtime/$name.pid"
 done
 
-for port in 8100 8101 8102 8103 8104 8105 8106 8107; do
+for port in 8108 8100 8101 8102 8103 8104 8105 8106 8107; do
   ready=false
   for _ in {1..40}; do
     if curl -fsS "http://127.0.0.1:$port/health" >/dev/null; then

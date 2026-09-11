@@ -22,8 +22,8 @@ provision the identity at instance creation.
 `governance.py` is a self-contained copy of the delegation, policy, and
 draft-hash logic from `src/governance_demo/security.py`. Agent Runtime uploads
 only the agent folder, so the module is duplicated in each rather than imported,
-and the shared signing key is fetched from Secret Manager at runtime rather
-than packaged in.
+and no signing key is packaged in at all: the agents call the Auth Broker to
+mint tokens and read only the *public* key to verify them.
 The token exchange, the nested `act` chain, the policy denials, and the SHA-256
 approval binding all run for real in-process.
 
@@ -38,11 +38,12 @@ cloud/.venv/bin/python cloud/deploy_a2a.py   # Procurement Agent (A2A)
 bash cloud/deploy_agents.sh                  # Inventory + ADK Procurement
 ```
 
-Then provision the shared issuer key and grant the agents access to it:
+Then create the KMS signing key and grant the two narrow roles:
 
 ```bash
-cloud/.venv/bin/python cloud/setup_issuer_secret.py          # create + grant
-cloud/.venv/bin/python cloud/setup_issuer_secret.py --show   # inspect
+cloud/.venv/bin/python cloud/setup_kms_signing.py          # create key + grant
+cloud/.venv/bin/python cloud/setup_kms_signing.py --show   # inspect bindings
+export KMS_SIGNING_KEY="...printed by the command above..."
 ```
 
 Run this **after** the agents exist, because it grants access to their Agent
@@ -106,8 +107,8 @@ Verified with `cloud/a2a_send.py` and from Inventory Agent in the runtime:
 
 The delegated token is verified **cryptographically** by Procurement Agent --
 signature, issuer, audience and scope. The human `sub` and the nested `act`
-chain genuinely survive the network hop. That is what `demo_keys/` exists for:
-two separately deployed agents need a shared issuer key to verify each other's
+chain genuinely survive the network hop. That is what the shared KMS key is for:
+two separately deployed agents need a common issuer to verify each other's
 tokens.
 
 **3b. How a deployed agent authenticates outbound: mTLS.**
@@ -150,7 +151,7 @@ is Google's:
 
 | | Google Cloud Agent Identity | Demo delegation JWT |
 |---|---|---|
-| Issued by | Agent Runtime, system-attested | This repo's `demo_keys/` issuer |
+| Issued by | Agent Runtime, system-attested | This repo's Auth Broker, signing via KMS |
 | Proves | which deployed workload is calling | nothing Google vouches for |
 | Enforced by | Google Cloud IAM | Procurement Agent's own code |
 | Carries | the agent principal | `sub: demo-user`, nested `act` chain |
@@ -199,42 +200,48 @@ python3 cloud/iam_binding.py \
 
 **3e. Where the signing key lives, and why that matters.**
 
-The delegation issuer key is held in **Secret Manager**, not packaged into
-either agent. At startup each agent calls:
+The delegation key is a **Cloud KMS asymmetric key** with purpose
+`ASYMMETRIC_SIGN`. Its private half is non-exportable: there is no API that
+returns those bytes, to us or to anyone. The Auth Broker signs by asking KMS to
+perform the operation:
 
 ```python
-client = secretmanager.SecretManagerServiceClient()
-private = client.access_secret_version(name=ISSUER_SECRET_NAME).payload.data
+digest = hashlib.sha256(signing_input).digest()
+response = client.asymmetric_sign(request={"name": KMS_SIGNING_KEY,
+                                           "digest": {"sha256": digest}})
 ```
 
 Three things follow, and all three are the point:
 
-1. **No private key is distributed.** The deployment bundle contains no key
-   material, and none is committed. A repository or an image leak yields
-   nothing.
-2. **The fetch is itself an IAM decision.** The agent authenticates with its own
-   Agent Identity, and reads the secret only because
-   `roles/secretmanager.secretAccessor` is bound on **that one secret** for
-   **that one principal**. Revoke it and the agent starts up but cannot sign or
-   verify anything. It is the same authentication/authorization split as the A2A
-   hop, on a different resource type.
-3. **Rotation stops being a redeployment.** `--rotate` adds a new version and
-   both agents pick it up, because both read `versions/latest`. When the key was
-   packaged, rotating it meant redeploying every agent in lockstep or the pair
-   would hold different keys and reject each other's tokens.
+1. **There is no key to steal.** Not in the deployment bundle, not in an
+   environment variable, not in the repository, not in a secret anyone can read
+   back. Agents receive the key's *resource name*, which is an identifier, not
+   material. A repository or image leak yields nothing usable.
+2. **Signing is a revocable capability, not a possession.** Only the Auth Broker
+   holds `roles/cloudkms.signerVerifier`. Verifying agents hold
+   `roles/cloudkms.publicKeyViewer`, which lets them read the public key and
+   nothing else -- so Procurement Agent can check a delegation it could never
+   mint. Revoke the broker's binding and signing stops *immediately and
+   everywhere*, which is not true of a key someone has already copied.
+3. **Rotation is additive.** `--rotate` creates a new key version; tokens carry
+   a `kid`, and verifiers refresh on signature mismatch. No redeployment, and no
+   window where two agents hold different keys.
 
-Access is scoped deliberately. `setup_issuer_secret.py` grants only to the three
-agents that participate in the delegation chain. Other agents in the same
-project, with perfectly valid Agent Identities, are not granted and cannot read
-it -- granting to "every agent we can see" is the over-broad binding this demo
-argues against.
+Every signature is a KMS API call, so Cloud Audit Logs record who signed what
+and when -- evidence that a file-based key cannot produce.
 
-The public key is **derived** from the private key rather than stored
-separately, so the pair cannot drift apart.
+**What this replaced.** Earlier revisions of this demo copied a private key into
+each agent package, then moved it to Secret Manager. Secret Manager was a real
+improvement over packaging, but it shares the underlying flaw: the secret is
+*designed to be read back*, so `roles/secretmanager.secretAccessor` hands over
+the ability to sign anywhere, forever, and revocation cannot retract a copy
+already taken. KMS removes the copy from existence.
 
-For production, this is the shape to keep: Secret Manager or KMS, or a managed
-issuer such as Agent Identity auth manager. What it replaces -- a private key
-copied into every agent deployment -- is the anti-pattern.
+**What Secret Manager is still for.** Secrets that cannot use a broker -- here
+the Zoho OAuth client secrets and refresh tokens, which a third party issues as
+bearer material we must store verbatim. Those move to Auth Manager once it
+brokers third-party OAuth credentials. The delegation private key never belonged
+in either.
 
 **4. Ask Inventory Agent to create the purchase order itself.**
 
@@ -260,9 +267,9 @@ and credential handling, content inspection, audit) and is not modelled here.
 Deploying the full control plane to Cloud Run is a larger job with four real
 obstacles, all of them worth naming before anyone attempts it:
 
-- the RS256 signing key is generated per process, so eight Cloud Run services
+- the delegation signing key is held by the Auth Broker alone, so eight Cloud Run services
   would each mint their own and every cross-service verification would fail;
-  it must move to Secret Manager;
+  they must all point at the same Auth Broker and KMS key;
 - `X-Gateway-Verified` is forgeable, which is harmless on localhost and a real
   bypass on a public URL, so services must be `--no-allow-unauthenticated`;
 - `config/registry.json` hardcodes `127.0.0.1` endpoints that only exist after

@@ -15,6 +15,13 @@ IDP_URL = os.getenv("IDP_URL", "http://127.0.0.1:8101")
 REGISTRY_URL = os.getenv("REGISTRY_URL", "http://127.0.0.1:8100")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:8102")
 ZOHO_URL = os.getenv("ZOHO_URL", "http://127.0.0.1:8107")
+AUTH_BROKER_URL = os.getenv("AUTH_BROKER_URL", "http://127.0.0.1:8108")
+
+# How the Identity Broker authenticates to the Auth Broker. A demo credential:
+# in a deployment this is the service's own Agent Identity, and the Auth Broker
+# authorizes it through IAM rather than a shared secret.
+BROKER_CLIENT_ID = os.getenv("BROKER_CLIENT_ID", "identity-broker")
+BROKER_CLIENT_SECRET = os.getenv("BROKER_CLIENT_SECRET", "identity-broker-demo-secret")
 
 
 def load_json(filename: str) -> dict:

@@ -53,7 +53,13 @@ else
 fi
 ADK="$CLOUD_ROOT/.venv/bin/adk"
 
-ISSUER_SECRET="projects/${PROJECT_ID}/secrets/a2a-demo-delegation-issuer/versions/latest"
+# The delegation key lives in Cloud KMS and is non-exportable. Agents receive
+# only the key's resource name and the Auth Broker's URL -- never key material.
+KMS_SIGNING_KEY="${KMS_SIGNING_KEY:-}"
+AUTH_BROKER_URL="${AUTH_BROKER_URL:-}"
+if [[ -z "$KMS_SIGNING_KEY" ]]; then
+  info "KMS_SIGNING_KEY is unset; run cloud/setup_kms_signing.py and export it"
+fi
 
 step "Enabling APIs"
 gcloud services enable aiplatform.googleapis.com storage.googleapis.com \
@@ -102,9 +108,10 @@ if [[ "$ONLY" == "both" || "$ONLY" == "inventory" ]]; then
   {
     echo "PROCUREMENT_A2A=$PROCUREMENT"
     echo "GOOGLE_CLOUD_LOCATION=$REGION"
-    echo "ISSUER_SECRET_NAME=$ISSUER_SECRET"
+    echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
+    echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
   } > "$STAGED"
-  info "staged PROCUREMENT_A2A and ISSUER_SECRET_NAME into the upload"
+  info "staged PROCUREMENT_A2A and the KMS key name into the upload (no key material)"
   deploy_agent inventory_agent "Inventory Agent"
   cleanup
   trap - EXIT

@@ -16,6 +16,8 @@ An Agent Identity does not replace Zoho OAuth, and neither proves human approval
 flowchart TD
     U["Human"] --> IA["Inventory Agent"]
     IA --> C["Governance control plane"]
+    C --> AB["Auth Broker"]
+    AB --> K["Cloud KMS<br/>non-exportable key"]
     IA --> IM["Inventory MCP"]
     IA --> PA["Procurement Agent"]
     PA --> PM["Procurement MCP"]
@@ -25,6 +27,13 @@ flowchart TD
 ```
 
 The control plane groups Registry, Identity Broker, and Gateway for readability. All A2A and MCP traffic passes through the Gateway.
+
+The Auth Broker sits apart from that grouping on purpose. It is the only
+component that can produce a signature, and the only one holding
+`roles/cloudkms.signerVerifier` on the delegation key. The Identity Broker
+decides *whether* a delegation is permitted; the Auth Broker decides whether it
+will *sign* one, and re-checks its own minting policy before it does. Neither
+alone can mint a token outside policy, and no agent can mint one at all.
 
 ## Authenticated business sequence
 
@@ -71,6 +80,18 @@ sequenceDiagram
 | Procurement Agent -> Procurement MCP | `demo-user` | `zoho-procurement-mcp` | `procurement-agent` nested over `inventory-agent` | `purchaseorder.create` |
 
 The MCP connector then exchanges its own dedicated Zoho refresh token for an opaque Zoho access token. The human/agent JWT is never forwarded to Zoho, and the Zoho token is never returned to an agent.
+
+## Signing authority
+
+| Capability | Auth Broker | Identity Broker | Agents |
+|---|---|---|---|
+| Hold delegation private key | never (KMS holds it) | no | no |
+| Request a signature | yes | via the broker | via the broker |
+| Read the public key | yes | yes | yes |
+| Mint outside minting policy | no | no | no |
+
+A compromised agent can request exactly the delegations policy already permits
+it. It cannot forge others, because it has nothing to forge with.
 
 ## Authorization invariant
 
