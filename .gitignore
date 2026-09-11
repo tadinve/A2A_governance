@@ -26,3 +26,4 @@ cloud/*_tmp*/
 # Key staging directories are gone; keep them un-committable if one reappears.
 cloud/demo_keys/
 cloud/*/demo_keys/
+.env_zoho_urls

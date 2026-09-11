@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import uuid
 
 from a2a.helpers.proto_helpers import new_text_message
@@ -17,6 +18,7 @@ from a2a.server.events import EventQueue
 from . import governance
 
 AGENT_ID = "procurement-agent"
+DEFAULT_SKU = os.getenv("DEMO_SKU", "DEMO-WIDGET-A")
 SPIFFE_ID = "spiffe://demo.local/agents/procurement-agent"
 
 
@@ -34,7 +36,7 @@ def _parse(text: str) -> dict:
     po = re.search(r"PO-\d+", (text or "").upper())
     return {
         "action": action,
-        "sku": sku.group(0) if sku else "CK-GPU-42",
+        "sku": sku.group(0) if sku else DEFAULT_SKU,
         "quantity": int(quantity.group(1)) if quantity else 0,
         "purchaseorder_id": po.group(0) if po else None,
     }
@@ -87,11 +89,11 @@ class ProcurementAgentExecutor(AgentExecutor):
 
         if action == "get_status":
             po_id = request.get("purchaseorder_id")
-            po = governance.PURCHASE_ORDERS.get(po_id or "")
+            po = governance.get_purchase_order(po_id or "")
             await event_queue.enqueue_event(new_text_message(_reply({
                 "status": "success" if po else "error",
                 "purchase_order": po,
-                "error_message": None if po else f"{po_id} not found in this instance",
+                "error_message": None if po else f"{po_id} not found in Zoho",
                 "agent_identity": SPIFFE_ID,
             })))
             return
@@ -106,15 +108,46 @@ class ProcurementAgentExecutor(AgentExecutor):
             })))
             return
 
-        sku = str(request.get("sku", "CK-GPU-42")).upper()
-        item = governance.ITEMS.get(sku)
+        sku = str(request.get("sku", DEFAULT_SKU)).upper()
+        try:
+            item = governance.find_item(sku)
+        except Exception as exc:  # noqa: BLE001 - surface the outage, never as zero stock
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "error",
+                "error_message": f"Could not reach Zoho Inventory: {type(exc).__name__}"})))
+            return
         if not item:
             await event_queue.enqueue_event(new_text_message(_reply({
                 "status": "error", "error_message": f"Unknown SKU {sku}"})))
             return
+
+        try:
+            vendor = governance.vendor_for(item)
+        except Exception as exc:  # noqa: BLE001
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "error", "error_message": str(exc)})))
+            return
+
+        rate = item.get("purchase_rate")
+        if rate is None:
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "error",
+                "error_message": f"{sku} has no purchase_rate in Zoho"})))
+            return
+
         quantity = int(request.get("quantity") or 0)
         if quantity <= 0:
-            quantity = item["target_stock"] - item["stock_on_hand"]
+            plan = governance.reorder_plan(item)
+            if not plan["resolved"]:
+                await event_queue.enqueue_event(new_text_message(_reply({
+                    "status": "unresolved", "reason": plan["reason"]})))
+                return
+            quantity = plan["suggested_quantity"]
+        if quantity <= 0:
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "no_action",
+                "reason": f"{sku} is not below its reorder level; no purchase order needed."})))
+            return
 
         request_id = str(uuid.uuid4())
         try:
@@ -129,10 +162,15 @@ class ProcurementAgentExecutor(AgentExecutor):
                 "status": "denied", "reason": str(denied)})))
             return
 
-        po = governance.create_draft(
-            item_id=item["item_id"], quantity=quantity, rate=item["purchase_rate"],
-            vendor_id=item["preferred_vendor_id"],
-            reference_number=f"A2A-{request_id[:8]}", idempotency_key=request_id)
+        try:
+            po = governance.create_draft(
+                item_id=item["item_id"], quantity=quantity, rate=float(rate),
+                vendor_id=vendor["contact_id"],
+                reference_number=f"A2A-{request_id[:8]}", idempotency_key=request_id)
+        except Exception as exc:  # noqa: BLE001
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "error", "error_message": f"Zoho refused the purchase order: {exc}"})))
+            return
 
         await event_queue.enqueue_event(new_text_message(_reply({
             "status": "success",

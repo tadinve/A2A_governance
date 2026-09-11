@@ -1,0 +1,62 @@
+{
+  "captured_utc": "2026-09-11T10:31:28.850279Z",
+  "project": "qwiklabs-gcp-03-10d9de3fe15b",
+  "location": "us-central1",
+  "note": "Pre-KMS-cutover state. Agents here run the Secret-Manager-key build with the in-process Zoho emulator. Use to roll back if the Auth Broker cutover fails.",
+  "reasoningEngines": [
+    {
+      "displayName": "Inventory Agent",
+      "name": "projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
+      "resource_id": "3222129270558031872",
+      "createTime": "2026-09-10T12:59:26.643699Z",
+      "updateTime": "2026-09-10T15:06:59.397262Z",
+      "effectiveIdentity": "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
+      "env_var_names": [
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY",
+        "GOOGLE_CLOUD_LOCATION",
+        "ISSUER_SECRET_NAME",
+        "PROCUREMENT_A2A"
+      ]
+    },
+    {
+      "displayName": "Procurement Agent (A2A)",
+      "name": "projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "resource_id": "1882730593880375296",
+      "createTime": "2026-09-10T13:44:42.381361Z",
+      "updateTime": "2026-09-10T15:03:32.302763Z",
+      "effectiveIdentity": "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "env_var_names": [
+        "ISSUER_SECRET_NAME"
+      ]
+    },
+    {
+      "displayName": "Procurement Agent",
+      "name": "projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "resource_id": "2745873609963601920",
+      "createTime": "2026-09-10T12:55:26.010161Z",
+      "updateTime": "2026-09-10T12:59:09.232611Z",
+      "effectiveIdentity": "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "env_var_names": [
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"
+      ]
+    },
+    {
+      "displayName": "Movie Pitch",
+      "name": "projects/611427964532/locations/us-central1/reasoningEngines/8174470379549491200",
+      "resource_id": "8174470379549491200",
+      "createTime": "2026-09-09T11:36:13.798071Z",
+      "updateTime": "2026-09-09T14:07:46.973472Z",
+      "effectiveIdentity": "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/8174470379549491200",
+      "env_var_names": [
+        "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS",
+        "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "MODEL",
+        "MOVIE_PITCH_BUCKET"
+      ]
+    }
+  ]
+}

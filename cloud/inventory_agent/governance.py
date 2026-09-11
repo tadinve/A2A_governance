@@ -16,6 +16,8 @@ from typing import Any
 
 import jwt
 
+from . import zoho_mcp
+
 ISSUER = "https://identity.demo.local"
 ALGORITHM = "RS256"
 
@@ -183,46 +185,256 @@ def human_token(user_id: str = "demo-user") -> str:
                        lifetime_seconds=900)
 
 
-# Zoho Inventory emulation -------------------------------------------------
+# Live Zoho Inventory access -------------------------------------------------
+#
+# This replaces the in-process emulator that used to live here. Reads go through
+# InvRead, writes through ProcureWrite, and neither server exposes an approval
+# tool -- so approval stays a human action outside this agent's reach.
+#
+# One thing Zoho does not supply: a target stock level. Zoho tracks
+# reorder_level (when to reorder) but not how much to reorder to. The order
+# quantity is therefore business policy, not inventory data, and it lives below
+# as explicit configuration. A SKU with no policy entry returns an unresolved
+# state rather than a guessed quantity.
 
-ORGANIZATION_ID = "demo-org-1001"
-VENDOR = {"vendor_id": "vendor-2001", "vendor_name": "CloudKarya Demo Supplier"}
-ITEMS = {
-    "CK-GPU-42": {
-        "item_id": "item-4242", "sku": "CK-GPU-42", "name": "CloudKarya GPU Node",
-        "stock_on_hand": 27, "reorder_level": 50, "target_stock": 100,
-        "purchase_rate": 245.00, "preferred_vendor_id": VENDOR["vendor_id"],
-    }
+# Demo reorder policy. Override with ZOHO_REORDER_POLICY as JSON, e.g.
+#   {"DEMO-WIDGET-A": {"target_stock": 100, "min_order_quantity": 1}}
+DEFAULT_REORDER_POLICY: dict[str, dict[str, Any]] = {
+    "DEMO-WIDGET-A": {"target_stock": 100, "min_order_quantity": 1},
 }
-PURCHASE_ORDERS: dict[str, dict[str, Any]] = {}
-_IDEMPOTENCY: dict[str, str] = {}
+
+_org_id: str | None = None
+
+
+def reorder_policy() -> dict[str, dict[str, Any]]:
+    raw = os.getenv("ZOHO_REORDER_POLICY", "").strip()
+    if not raw:
+        return DEFAULT_REORDER_POLICY
+    try:
+        return json.loads(raw)
+    except Exception:
+        return DEFAULT_REORDER_POLICY
+
+
+def organization_id() -> str:
+    """Resolve the Zoho organization once, refusing to guess between several."""
+    global _org_id
+    if _org_id:
+        return _org_id
+    configured = os.getenv("ZOHO_ORGANIZATION_ID", "").strip()
+    if configured:
+        _org_id = configured
+        return _org_id
+    orgs = zoho_mcp.list_organizations()
+    if len(orgs) != 1:
+        raise ZohoPolicyError(
+            f"Zoho returned {len(orgs)} organizations. Set ZOHO_ORGANIZATION_ID "
+            f"so this agent does not have to guess which one to use."
+        )
+    _org_id = orgs[0]["organization_id"]
+    return _org_id
+
+
+class ZohoPolicyError(Exception):
+    """Inventory or policy data is missing; the caller must not guess."""
+
+
+def find_item(sku: str) -> dict[str, Any] | None:
+    """Look up an item by SKU through the read-only connector."""
+    return zoho_mcp.find_item_by_sku(organization_id(), sku)
+
+
+def available_stock(item: dict[str, Any]) -> float | None:
+    """Stock we can actually commit against.
+
+    Prefers Zoho's actual_available_stock, which already excludes committed
+    stock, so subtracting committed again would double-count it. Returns None
+    when Zoho supplies no stock field at all -- an untracked item is not a
+    zero-stock item, and a tool failure is never zero stock.
+    """
+    for field in ("actual_available_stock", "available_stock", "stock_on_hand"):
+        value = item.get(field)
+        if value is not None:
+            return float(value)
+    return None
+
+
+def incoming_quantity(item: dict[str, Any]) -> float:
+    """Quantity already on order and not yet received.
+
+    Counted so a second purchase order is not raised for stock that is already
+    inbound. Zoho reports ordered and received quantities per line.
+    """
+    incoming = 0.0
+    try:
+        orders = zoho_mcp.list_item_purchase_orders(organization_id(), item["item_id"])
+    except Exception:
+        # Treated as unknown rather than zero by the caller below.
+        raise
+    for order in orders:
+        status = str(order.get("status", "")).lower()
+        if status in ("cancelled", "closed", "billed"):
+            continue
+        ordered = float(order.get("quantity_ordered") or order.get("quantity") or 0)
+        received = float(order.get("quantity_received") or 0)
+        incoming += max(ordered - received, 0.0)
+    return incoming
+
+
+def reorder_plan(item: dict[str, Any]) -> dict[str, Any]:
+    """Decide whether to reorder and how much, or say why it cannot be decided."""
+    sku = str(item.get("sku", "")).upper()
+    available = available_stock(item)
+    if available is None:
+        return {"resolved": False,
+                "reason": f"Zoho reports no stock field for {sku}; it may not be "
+                          f"inventory-tracked. Not treating that as zero stock."}
+
+    level = item.get("reorder_level")
+    if level is None:
+        return {"resolved": False,
+                "reason": f"{sku} has no reorder_level set in Zoho."}
+    level = float(level)
+
+    policy = reorder_policy().get(sku)
+    if not policy or policy.get("target_stock") is None:
+        return {"resolved": False,
+                "reason": f"No target stock configured for {sku}. Zoho stores "
+                          f"reorder_level but not a target, so the order quantity "
+                          f"is policy data that must be configured."}
+    target = float(policy["target_stock"])
+
+    try:
+        incoming = incoming_quantity(item)
+    except Exception as exc:
+        return {"resolved": False,
+                "reason": f"Could not read open purchase orders for {sku}: "
+                          f"{type(exc).__name__}. Refusing to order without knowing "
+                          f"what is already inbound."}
+
+    # Strictly below, per the documented rule. At exactly the threshold we do
+    # not reorder.
+    below = available < level
+    position = available + incoming
+    shortfall = max(target - position, 0.0)
+    # Zoho carries its own supplier constraints; prefer them over local policy.
+    zoho_min = item.get("minimum_order_quantity")
+    zoho_max = item.get("maximum_order_quantity")
+    minimum = float(zoho_min) if zoho_min else float(policy.get("min_order_quantity") or 1)
+    quantity = 0.0 if not below or shortfall <= 0 else max(shortfall, minimum)
+    capped_by = None
+    if quantity and zoho_max and float(zoho_max) > 0 and quantity > float(zoho_max):
+        capped_by = float(zoho_max)
+        quantity = capped_by
+    quantity = int(quantity)
+
+    return {
+        "resolved": True,
+        "reorder_needed": below and quantity > 0,
+        "available_stock": available,
+        "committed_stock": item.get("committed_stock"),
+        "incoming_quantity": incoming,
+        "reorder_level": level,
+        "target_stock": target,
+        "suggested_quantity": quantity,
+        "minimum_order_quantity": minimum,
+        "capped_by_maximum_order_quantity": capped_by,
+        "rule": ("Reorder when available < reorder_level. Quantity brings "
+                 "available + already-inbound up to target_stock. "
+                 "actual_available_stock already nets off committed stock."),
+    }
+
+
+def vendor_for(item: dict[str, Any]) -> dict[str, Any]:
+    """The approved vendor for an item, verified to be a vendor in Zoho."""
+    vendor_id = item.get("vendor_id") or item.get("preferred_vendor_id")
+    if not vendor_id:
+        raise ZohoPolicyError(
+            f"{item.get('sku')} has no preferred vendor in Zoho. Set one before "
+            f"raising a purchase order; this agent will not choose a supplier."
+        )
+    return zoho_mcp.find_vendor(organization_id(), str(vendor_id))
 
 
 def draft_hash(po: dict[str, Any]) -> str:
     """Approval binds to exactly these fields. Any mutation invalidates it."""
-    approved = {"vendor_id": po["vendor_id"], "reference_number": po["reference_number"],
-                "line_items": po["line_items"], "total": po["total"]}
-    return hashlib.sha256(json.dumps(approved, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    approved = {
+        "vendor_id": str(po.get("vendor_id", "")),
+        "reference_number": po.get("reference_number"),
+        "line_items": [
+            {"item_id": str(line.get("item_id")),
+             "quantity": float(line.get("quantity") or 0),
+             "rate": float(line.get("rate") or 0)}
+            for line in po.get("line_items", [])
+        ],
+        "total": float(po.get("total") or 0),
+    }
+    return hashlib.sha256(
+        json.dumps(approved, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def create_draft(item_id: str, quantity: int, rate: float, vendor_id: str,
                  reference_number: str, idempotency_key: str) -> dict[str, Any]:
-    if idempotency_key in _IDEMPOTENCY:
-        return PURCHASE_ORDERS[_IDEMPOTENCY[idempotency_key]]
-    item = next((v for v in ITEMS.values() if v["item_id"] == item_id), None)
-    if not item or quantity <= 0 or rate != item["purchase_rate"]:
-        raise ValueError("Invalid item, quantity, or approved purchase rate")
-    if vendor_id != VENDOR["vendor_id"]:
-        raise ValueError("Vendor is not on the approved vendor list")
-    po_id = f"PO-{len(PURCHASE_ORDERS) + 1001}"
-    po = {
-        "purchaseorder_id": po_id, "vendor_id": vendor_id, "vendor_name": VENDOR["vendor_name"],
+    """Create a real purchase order in Zoho and submit it for human approval.
+
+    Idempotency is by reference_number: before creating, we look for an existing
+    order carrying the same reference. Zoho has no idempotency-key header, so the
+    reference is the unique external key, and a retry after a lost response finds
+    the original instead of raising a duplicate.
+    """
+    org = organization_id()
+
+    existing = _find_by_reference(org, item_id, reference_number)
+    if existing:
+        existing["draft_hash"] = draft_hash(existing)
+        existing["idempotent_replay"] = True
+        return existing
+
+    if quantity <= 0:
+        raise ValueError("Quantity must be positive")
+
+    created = zoho_mcp.create_purchase_order(org, {
+        "vendor_id": str(vendor_id),
         "reference_number": reference_number,
-        "line_items": [{"item_id": item_id, "sku": item["sku"], "quantity": quantity, "rate": rate}],
-        "total": round(quantity * rate, 2), "status": "submitted",
-        "approval_status": "pending_approval",
-    }
-    po["draft_hash"] = draft_hash(po)
-    PURCHASE_ORDERS[po_id] = po
-    _IDEMPOTENCY[idempotency_key] = po_id
-    return po
+        "line_items": [{"item_id": str(item_id), "quantity": quantity, "rate": rate}],
+    })
+    po_id = created.get("purchaseorder_id")
+    if not po_id:
+        raise ZohoPolicyError("Zoho accepted the create but returned no purchaseorder_id")
+
+    # Submit moves it into Zoho's approval workflow. It is not approval: no
+    # approval tool is exposed on any connector this agent can reach.
+    try:
+        submitted = zoho_mcp.submit_purchase_order(org, po_id)
+        if submitted:
+            created = submitted
+    except Exception:
+        created = zoho_mcp.get_purchase_order(org, po_id, server=zoho_mcp.PROCUREWRITE)
+
+    created["draft_hash"] = draft_hash(created)
+    created["idempotent_replay"] = False
+    return created
+
+
+def _find_by_reference(org: str, item_id: str, reference_number: str) -> dict[str, Any] | None:
+    """Find an existing PO for this item carrying this reference number."""
+    try:
+        for order in zoho_mcp.list_item_purchase_orders(org, item_id):
+            if str(order.get("reference_number", "")) == reference_number:
+                return zoho_mcp.get_purchase_order(
+                    org, order["purchaseorder_id"], server=zoho_mcp.PROCUREWRITE)
+    except Exception:
+        return None
+    return None
+
+
+def get_purchase_order(purchaseorder_id: str) -> dict[str, Any] | None:
+    """Read a purchase order back from Zoho, not from process memory."""
+    try:
+        po = zoho_mcp.get_purchase_order(
+            organization_id(), purchaseorder_id, server=zoho_mcp.PROCUREWRITE)
+    except Exception:
+        return None
+    if po:
+        po["draft_hash"] = draft_hash(po)
+    return po or None

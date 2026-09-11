@@ -40,11 +40,23 @@ def draft_purchase_order(sku: str, quantity: int) -> dict:
     each agent is added to the actor chain.
     """
     sku = sku.upper()
-    item = governance.ITEMS.get(sku)
+    try:
+        item = governance.find_item(sku)
+    except Exception as exc:
+        return {"status": "error",
+                "error_message": f"Could not reach Zoho Inventory: {type(exc).__name__}"}
     if not item:
         return {"status": "error", "error_message": f"Unknown SKU {sku}"}
     if quantity <= 0:
         return {"status": "error", "error_message": "Quantity must be positive"}
+    try:
+        vendor = governance.vendor_for(item)
+    except Exception as exc:
+        return {"status": "error", "error_message": str(exc)}
+    rate = item.get("purchase_rate")
+    if rate is None:
+        return {"status": "error",
+                "error_message": f"{sku} has no purchase_rate in Zoho; refusing to invent a price."}
 
     request_id = str(uuid.uuid4())
     try:
@@ -57,10 +69,14 @@ def draft_purchase_order(sku: str, quantity: int) -> dict:
     except governance.PolicyDenied as denied:
         return {"status": "error", "error_message": str(denied)}
 
-    po = governance.create_draft(
-        item_id=item["item_id"], quantity=quantity, rate=item["purchase_rate"],
-        vendor_id=item["preferred_vendor_id"],
-        reference_number=f"AGENT-{request_id[:8]}", idempotency_key=request_id)
+    try:
+        po = governance.create_draft(
+            item_id=item["item_id"], quantity=quantity, rate=float(rate),
+            vendor_id=vendor["contact_id"],
+            reference_number=f"AGENT-{request_id[:8]}", idempotency_key=request_id)
+    except Exception as exc:
+        return {"status": "error",
+                "error_message": f"Zoho refused the purchase order: {exc}"}
 
     return {
         "status": "success",
@@ -80,10 +96,10 @@ def draft_purchase_order(sku: str, quantity: int) -> dict:
 
 def get_purchase_order_status(purchaseorder_id: str) -> dict:
     """Look up the current status of a purchase order this agent drafted."""
-    po = governance.PURCHASE_ORDERS.get(purchaseorder_id)
+    po = governance.get_purchase_order(purchaseorder_id)
     if not po:
         return {"status": "error",
-                "error_message": f"{purchaseorder_id} not found in this instance"}
+                "error_message": f"{purchaseorder_id} not found in Zoho"}
     return {"status": "success", "purchase_order": po}
 
 

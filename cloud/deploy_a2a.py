@@ -19,6 +19,7 @@ REQUIREMENTS = [
     "PyJWT>=2.8",
     "cryptography>=42",
     "google-cloud-secret-manager>=2.20",
+    "requests>=2.31",
 ]
 
 

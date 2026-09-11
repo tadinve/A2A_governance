@@ -17,7 +17,7 @@ def build_agent():
                          "approval. Verifies a delegated token when one is presented. "
                          "Cannot approve."),
             tags=["procurement", "zoho", "human-approval"],
-            examples=['{"action":"create_po","sku":"CK-GPU-42","quantity":73}'],
+            examples=['{"action":"create_po","sku":"DEMO-WIDGET-A","quantity":70}'],
         ),
         AgentSkill(
             id="purchase-order-status",

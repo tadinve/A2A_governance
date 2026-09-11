@@ -44,22 +44,45 @@ def show_my_identity() -> dict:
 def check_stock(sku: str) -> dict:
     """Check stock on hand for a SKU and say whether it needs reordering."""
     sku = sku.upper()
-    item = governance.ITEMS.get(sku)
+    try:
+        item = governance.find_item(sku)
+    except Exception as exc:
+        # A tool failure is not zero stock, and must not read as "no reorder".
+        return {"status": "error",
+                "error_message": f"Could not reach Zoho Inventory: {type(exc).__name__}"}
     if not item:
         return {"status": "error", "error_message": f"Unknown SKU {sku}"}
+
     try:
         delegated = governance.exchange_token(
             AGENT_ID, governance.human_token(), "zoho-inventory-mcp", "inventory.read")
     except governance.PolicyDenied as denied:
         return {"status": "error", "error_message": str(denied)}
-    low = item["stock_on_hand"] < item["reorder_level"]
+
+    plan = governance.reorder_plan(item)
+    if not plan["resolved"]:
+        return {
+            "status": "unresolved",
+            "item": {"item_id": item.get("item_id"), "sku": item.get("sku"),
+                     "name": item.get("name")},
+            "reason": plan["reason"],
+            "note": "Reporting unresolved rather than guessing an order quantity.",
+        }
+
     return {
         "status": "success",
-        "item": item,
-        "reorder_needed": low,
-        "suggested_quantity": item["target_stock"] - item["stock_on_hand"] if low else 0,
+        "item": {"item_id": item.get("item_id"), "sku": item.get("sku"),
+                 "name": item.get("name"), "purchase_rate": item.get("purchase_rate")},
+        "stock": {"available": plan["available_stock"],
+                  "committed": plan["committed_stock"],
+                  "incoming_on_open_orders": plan["incoming_quantity"],
+                  "reorder_level": plan["reorder_level"],
+                  "target_stock": plan["target_stock"]},
+        "reorder_needed": plan["reorder_needed"],
+        "suggested_quantity": plan["suggested_quantity"],
+        "rule": plan["rule"],
         "delegation_evidence": delegated["claims"],
-        "note": "Read through a delegated inventory.read token. This agent cannot write.",
+        "note": "Read from live Zoho through a delegated inventory.read token. This agent cannot write.",
     }
 
 
