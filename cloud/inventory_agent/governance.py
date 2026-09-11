@@ -420,7 +420,14 @@ def create_draft(item_id: str, quantity: int, rate: float, vendor_id: str,
     """
     org = organization_id()
 
-    existing = _find_by_reference(org, item_id, reference_number)
+    try:
+        existing = _find_by_reference(org, item_id, reference_number)
+    except Exception as exc:
+        raise ZohoPolicyError(
+            f"Could not determine whether {reference_number} already exists "
+            f"({type(exc).__name__}). Refusing to create a possible duplicate; "
+            f"reconcile by reference number before retrying."
+        ) from None
     if existing:
         existing["draft_hash"] = draft_hash(existing)
         existing["idempotent_replay"] = True
@@ -453,14 +460,34 @@ def create_draft(item_id: str, quantity: int, rate: float, vendor_id: str,
 
 
 def _find_by_reference(org: str, item_id: str, reference_number: str) -> dict[str, Any] | None:
-    """Find an existing PO for this item carrying this reference number."""
+    """Find an existing PO for this item carrying this reference number.
+
+    list_item_purchase_orders returns a trimmed record whose reference_number is
+    null, so each candidate has to be re-read in full before comparing. Matching
+    against the list directly silently never matches, which would let a retry
+    after a lost response create a second real purchase order -- the exact
+    duplicate this guard exists to prevent.
+    """
     try:
         for order in zoho_mcp.list_item_purchase_orders(org, item_id):
-            if str(order.get("reference_number", "")) == reference_number:
+            po_id = order.get("purchaseorder_id")
+            if not po_id:
+                continue
+            reference = order.get("reference_number")
+            if reference is None:
+                detail = zoho_mcp.get_purchase_order(
+                    org, po_id, server=zoho_mcp.PROCUREWRITE)
+                reference = detail.get("reference_number")
+                if str(reference or "") == reference_number:
+                    return detail
+                continue
+            if str(reference) == reference_number:
                 return zoho_mcp.get_purchase_order(
-                    org, order["purchaseorder_id"], server=zoho_mcp.PROCUREWRITE)
+                    org, po_id, server=zoho_mcp.PROCUREWRITE)
     except Exception:
-        return None
+        # Unknown rather than absent: the caller must not treat this as
+        # "no existing order" and create another one.
+        raise
     return None
 
 
