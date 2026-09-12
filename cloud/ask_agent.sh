@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ask a deployed agent a question and print its reply.
-#   bash cloud/ask_agent.sh "Inventory Agent" "Check stock on CK-GPU-42"
+#   bash cloud/ask_agent.sh "Inventory Agent" "Check stock on DEMO-WIDGET-A"
 set -euo pipefail
 
 DISPLAY_NAME="$1"; MESSAGE="$2"

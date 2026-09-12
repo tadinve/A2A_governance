@@ -15,7 +15,8 @@
 - two independent Zoho OAuth refresh grants and opaque access tokens
 - human session authentication and approver-role check
 - exact-draft SHA-256 approval binding
-- idempotent PO creation
+- idempotent PO creation, keyed on a stable operation id that survives a retry
+  on both the UI path and the direct A2A path
 - OpenTelemetry and append-only audit events
 
 ## Deliberately simulated

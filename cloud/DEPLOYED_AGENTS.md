@@ -87,7 +87,7 @@ account, and neither can be found by searching for one.
 
 **2. Ask Inventory Agent to reorder.**
 
-In the deployment's Playground: *"Stock is low on CK-GPU-42. Ask Procurement
+In the deployment's Playground: *"Stock is low on DEMO-WIDGET-A. Ask Procurement
 Agent to draft a purchase order for 73 units."*
 
 Inventory Agent mints a delegated token and sends it to Procurement Agent over
@@ -123,6 +123,22 @@ simply left the token out got a real purchase order with a complete-looking
 provenance chain behind it. A write now requires the token, and the Auth Broker
 grants this principal no rule with which to mint the replacement, so removing
 the check would not reopen the path.
+
+**3a. Retrying a request does not buy the goods twice.**
+
+A purchase order is real money, and a lost response is the normal case, not the
+exceptional one. So the A2A payload carries an `operation_id` that Inventory
+Agent *derives* -- `sha256(human | sku | quantity)` -- rather than generates.
+Procurement Agent turns it into the Zoho reference number, and `create_draft`
+looks for that reference before creating anything, so the second attempt
+returns the first order with `idempotent_replay: true`.
+
+It used to be `uuid4()` per attempt, which guaranteed the opposite: every retry
+produced a new reference, and therefore a second purchase order. A caller that
+omits `operation_id` gets one derived from the same three facts, so even a
+hand-rolled `a2a_send.py` retry is safe. Note the A2A `messageId` stays unique
+per transmission -- it identifies the message, not the business operation, and
+conflating the two is how this defect gets reintroduced.
 
 The delegated token is verified **cryptographically** by Procurement Agent --
 signature, issuer, audience and scope. The human `sub` and the nested `act`

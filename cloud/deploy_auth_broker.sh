@@ -17,6 +17,14 @@ KEY_ID="delegation-issuer"
 KEY="projects/${PROJECT_ID}/locations/${REGION}/keyRings/${KEY_RING}/cryptoKeys/${KEY_ID}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
+# Cloud Run serves this service at https://<service>-<project number>.<region>.run.app.
+# Agents mint their ID token for exactly that audience, and the broker verifies
+# against it, so the two must agree -- and the project number is not something
+# this script may assume. It was hardcoded to one lab, which meant every agent
+# in a rebuilt project authenticated against an audience that did not exist.
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+BROKER_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
+
 step() { echo; echo "=== $* ==="; }
 info() { echo "    $*"; }
 
@@ -70,18 +78,22 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA_EMAIL" \
   --no-allow-unauthenticated \
-  --set-env-vars "DELEGATION_SIGNER=kms,TRACE_EXPORTER=gcp,KMS_SIGNING_KEY=${KEY}/cryptoKeyVersions/1,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},AUTH_BROKER_AUDIENCE=https://a2a-auth-broker-611427964532.${REGION}.run.app" \
+  --set-env-vars "DELEGATION_SIGNER=kms,TRACE_EXPORTER=gcp,KMS_SIGNING_KEY=${KEY}/cryptoKeyVersions/1,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},AUTH_BROKER_AUDIENCE=${BROKER_URL}" \
   --min-instances 0 --max-instances 3 --timeout 60 \
   --quiet
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+# Report the project-number URL, not Cloud Run's hashed alias: agents put this
+# value in AUTH_BROKER_URL and mint their ID token for it, and it has to be the
+# string the broker checks AUTH_BROKER_AUDIENCE against.
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
 
 step "Deployed"
 info "service  : $SERVICE"
 info "revision : $REVISION"
-info "url      : $URL"
+info "url      : $BROKER_URL"
+info "alias    : $URL  (Cloud Run's hashed alias; not the token audience)"
 info "auth     : --no-allow-unauthenticated (callers need roles/run.invoker)"
 echo
-echo "AUTH_BROKER_URL=$URL"
+echo "AUTH_BROKER_URL=$BROKER_URL"
 echo "KMS_SIGNING_KEY=${KEY}/cryptoKeyVersions/1"

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import re
 import os
-import uuid
 
 from a2a.helpers.proto_helpers import new_text_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -30,13 +29,13 @@ def _parse(text: str) -> dict:
             return payload
     except (json.JSONDecodeError, TypeError):
         pass
-    sku = re.search(r"CK-[A-Z]+-\d+", (text or "").upper())
+    sku = governance.sku_from_text(text, DEFAULT_SKU)
     quantity = re.search(r"\b(\d+)\s*(?:units?|pcs?)\b", (text or "").lower())
     action = "get_status" if re.search(r"\bstatus\b", (text or "").lower()) else "create_po"
     po = re.search(r"PO-\d+", (text or "").upper())
     return {
         "action": action,
-        "sku": sku.group(0) if sku else DEFAULT_SKU,
+        "sku": sku,
         "quantity": int(quantity.group(1)) if quantity else 0,
         "purchaseorder_id": po.group(0) if po else None,
     }
@@ -58,6 +57,7 @@ class ProcurementAgentExecutor(AgentExecutor):
         # minted a substitute human grant when it was missing, which meant the
         # governance held only for callers that chose to participate in it.
         delegation_report: dict = {"presented": False}
+        subject = ""
         subject_token = request.get("delegated_token")
         if not subject_token and action == "create_po":
             await event_queue.enqueue_event(new_text_message(_reply({
@@ -75,6 +75,9 @@ class ProcurementAgentExecutor(AgentExecutor):
             try:
                 claims = governance.decode_token(subject_token, audience=AGENT_ID)
                 scopes = governance.token_scopes(claims)
+                # The human this work is attributable to, taken from the verified
+                # token and nowhere else. It is half of the operation identity.
+                subject = str(claims.get("sub", ""))
                 delegation_report = {
                     "presented": True,
                     "verified": True,
@@ -163,7 +166,15 @@ class ProcurementAgentExecutor(AgentExecutor):
                 "reason": f"{sku} is not below its reorder level; no purchase order needed."})))
             return
 
-        request_id = str(uuid.uuid4())
+        # The operation id travels with the request. A caller that omits it gets
+        # one derived from the same three facts, so a direct retry is idempotent
+        # too; what is gone is the per-attempt UUID that made every retry a new
+        # purchase order.
+        operation = str(request.get("operation_id") or "").strip()
+        derived = not operation
+        if not operation:
+            operation = governance.operation_id(subject, sku, quantity)
+
         try:
             # This agent's own delegation down into the procurement MCP, always
             # extended from the token it was handed. There is no other input.
@@ -178,7 +189,7 @@ class ProcurementAgentExecutor(AgentExecutor):
             po = governance.create_draft(
                 item_id=item["item_id"], quantity=quantity, rate=float(rate),
                 vendor_id=vendor["contact_id"],
-                reference_number=f"A2A-{request_id[:8]}", idempotency_key=request_id)
+                reference_number=f"A2A-{operation}")
         except Exception as exc:  # noqa: BLE001
             await event_queue.enqueue_event(new_text_message(_reply({
                 "status": "error", "error_message": f"Zoho refused the purchase order: {exc}"})))
@@ -189,6 +200,12 @@ class ProcurementAgentExecutor(AgentExecutor):
             "agent_identity": SPIFFE_ID,
             "purchase_order": po,
             "human_approval": "REQUIRED. This agent cannot approve it.",
+            "idempotency": {
+                "operation_id": operation,
+                "source": "derived from the request" if derived else "supplied by the caller",
+                "reference_number": po.get("reference_number"),
+                "replayed_an_existing_order": po.get("idempotent_replay"),
+            },
             "received_delegation": delegation_report,
             "issued_to_procurement_mcp": mcp["claims"],
         })))

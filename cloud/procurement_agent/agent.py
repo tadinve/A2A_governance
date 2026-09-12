@@ -9,7 +9,6 @@ Broker grants this principal no minting rule with which to invent one.
 from __future__ import annotations
 
 import os
-import uuid
 
 from google.adk.agents import Agent
 

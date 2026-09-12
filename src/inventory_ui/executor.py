@@ -171,7 +171,6 @@ def submit_approved_draft(draft_row: dict[str, Any], approval: dict[str, Any]) -
             rate=float(line["rate"]),
             vendor_id=payload["vendor_id"],
             reference_number=payload["reference_number"],
-            idempotency_key=payload["reference_number"],
         )
     except Exception as exc:
         # We may or may not have created an order. Reconcile by the reference,

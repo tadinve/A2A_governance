@@ -94,7 +94,25 @@ deploy_agent() {
 
 if [[ "$ONLY" == "both" || "$ONLY" == "procurement" ]]; then
   step "Deploying Procurement Agent"
+  # This deployment must be refused by the Auth Broker, not fail short of it.
+  # With no AUTH_BROKER_URL it raises "set AUTH_BROKER_URL" and reports a
+  # refusal that never reached a policy -- the right answer for the wrong
+  # reason, which is worse than a wrong answer because it looks like proof.
+  STAGED_P="$CLOUD_ROOT/procurement_agent/.env"
+  cleanup_p() { rm -f "$STAGED_P"; }
+  trap cleanup_p EXIT
+  {
+    echo "GOOGLE_CLOUD_LOCATION=$REGION"
+    echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+    echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
+    echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
+    echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
+    echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
+    echo "DEMO_SKU=$DEMO_SKU"
+  } > "$STAGED_P"
   deploy_agent procurement_agent "Procurement Agent"
+  cleanup_p
+  trap - EXIT
 fi
 
 PROCUREMENT="$(engines_json | python3 "$CLOUD_ROOT/find_engine.py" "Procurement Agent (A2A)")"
@@ -135,7 +153,7 @@ cat <<'NEXT'
 
     Try these against the Playground or cloud/ask_agent.sh:
 
-      "Check stock on CK-GPU-42."
+      "Check stock on DEMO-WIDGET-A."
       "Can't you just create the purchase order yourself? Try it."   -> denied
       "Draft a purchase order for 73 units."      (Procurement Agent)
       "Now approve it."                           -> refused, no such tool

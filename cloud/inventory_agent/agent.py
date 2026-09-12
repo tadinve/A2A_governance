@@ -215,6 +215,12 @@ def request_reorder_from_procurement_agent(sku: str, quantity: int) -> dict:
 
     That JWT is this demo's delegation model, separate from the Google Cloud
     Agent Identity that authenticates the transport.
+
+    The request also carries an operation id, derived here from the human and
+    the order rather than generated per attempt. It is what makes a retry of
+    this call idempotent: Procurement Agent turns it into the Zoho reference
+    number, and a second attempt finds the first purchase order instead of
+    raising another one.
     """
     if not PROCUREMENT_A2A:
         return {"status": "error",
@@ -227,11 +233,17 @@ def request_reorder_from_procurement_agent(sku: str, quantity: int) -> dict:
         return {"status": "error", "outcome": "DENIED by delegation policy",
                 "detail": str(denied)}
 
+    operation = governance.operation_id(
+        str(delegated["claims"]["sub"]), sku, quantity)
     payload = json.dumps({
         "action": "create_po", "sku": sku.upper(), "quantity": quantity,
+        "operation_id": operation,
         "delegated_token": delegated["access_token"],
     })
     region = PROCUREMENT_A2A.split("/locations/")[1].split("/")[0]
+    # messageId identifies this transmission and is new every time; operation_id
+    # identifies the business request and is not. Conflating them is how a
+    # retried message becomes a second purchase order.
     body = {"message": {"messageId": str(uuid.uuid4()), "role": "ROLE_USER",
                         "parts": [{"text": payload}]}}
     try:
@@ -279,7 +291,11 @@ def request_reorder_from_procurement_agent(sku: str, quantity: int) -> dict:
     if response.status_code != 200:
         return {"status": "error", "http_status": response.status_code,
                 "detail": response.text[:500],
-                "sent_delegation": delegated["claims"]}
+                "operation_id": operation,
+                "sent_delegation": delegated["claims"],
+                "retry_is_safe": ("Yes. Retrying this call recomputes the same "
+                                  "operation_id, so it cannot create a second "
+                                  "purchase order.")}
 
     # The reply is an A2A message envelope; pull the first text part out of it.
     found: list[str] = []
@@ -303,6 +319,7 @@ def request_reorder_from_procurement_agent(sku: str, quantity: int) -> dict:
     return {
         "status": "success", "outcome": "ALLOWED by IAM", "http_status": 200,
         "mtls_configured": mtls, "endpoint": host,
+        "operation_id": operation,
         "sent_delegation": delegated["claims"],
         "procurement_agent_result": result,
         "lesson": ("A real A2A protocol call across two separately identified "

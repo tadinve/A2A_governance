@@ -50,6 +50,16 @@ def main() -> int:
             # half is non-exportable and only the Auth Broker may invoke it.
             "KMS_SIGNING_KEY": os.environ.get("KMS_SIGNING_KEY", ""),
             "AUTH_BROKER_URL": os.environ.get("AUTH_BROKER_URL", ""),
+            # This agent reaches live Zoho through the MCP connectors, whose URLs
+            # it reads from Secret Manager. That lookup needs the project id,
+            # which Agent Runtime injects itself -- GOOGLE_CLOUD_PROJECT is a
+            # reserved name and setting it here is rejected outright. (ADK
+            # quietly strips it from a staged .env, which is why the Inventory
+            # Agent appears to set it and does not.)
+            "GOOGLE_CLOUD_LOCATION": location,
+            "ZOHO_ORGANIZATION_ID": os.environ.get("ZOHO_ORGANIZATION_ID", ""),
+            "DEMO_SKU": os.environ.get("DEMO_SKU", "DEMO-WIDGET-A"),
+            "ZOHO_REORDER_POLICY": os.environ.get("ZOHO_REORDER_POLICY", ""),
         },
     )
 

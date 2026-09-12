@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -309,25 +310,70 @@ def available_stock(item: dict[str, Any]) -> float | None:
     return None
 
 
+# A purchase order in one of these states will not deliver anything further.
+# Everything else -- draft, pending approval, open, partially received, even
+# billed -- may still have stock to come, and the per-line arithmetic below
+# decides how much.
+_NOT_COMING = ("cancelled", "closed")
+
+
 def incoming_quantity(item: dict[str, Any]) -> float:
     """Quantity already on order and not yet received.
 
     Counted so a second purchase order is not raised for stock that is already
-    inbound. Zoho reports ordered and received quantities per line.
+    inbound.
+
+    Each candidate order is re-read in full, because the record returned by
+    `list_item_purchase_orders` is trimmed: it carries `item_quantity` and
+    `order_status`, and no line detail at all. The obvious-looking fields --
+    `quantity`, `quantity_received`, `status` -- are all absent from it, so
+    reading them off the list silently yields 0 for every order and this
+    function returns 0 no matter how much stock is on the way. That is the
+    worst possible direction for the error to run: it reports nothing inbound,
+    the reorder plan makes up the whole shortfall again, and the business buys
+    the same goods twice. It is the same trap `_find_by_reference` documents
+    for `reference_number`, in the same list response.
+
+    Nothing here treats an unreadable order as an empty one. A failure
+    propagates so `reorder_plan` reports unresolved, because "we could not tell
+    what is on order" must never be rendered as "nothing is on order".
     """
+    org = organization_id()
     incoming = 0.0
-    try:
-        orders = zoho_mcp.list_item_purchase_orders(organization_id(), item["item_id"])
-    except Exception:
-        # Treated as unknown rather than zero by the caller below.
-        raise
+    # A failure here is unknown, not absent; the caller must not read it as zero.
+    orders = zoho_mcp.list_item_purchase_orders(org, item["item_id"])
+    item_id = str(item["item_id"])
+
     for order in orders:
-        status = str(order.get("status", "")).lower()
-        if status in ("cancelled", "closed", "billed"):
+        po_id = order.get("purchaseorder_id")
+        if not po_id:
             continue
-        ordered = float(order.get("quantity_ordered") or order.get("quantity") or 0)
-        received = float(order.get("quantity_received") or 0)
-        incoming += max(ordered - received, 0.0)
+        # Read-only connector, deliberately. How much is on order is a *read*,
+        # and Inventory Agent has to be able to answer it: it holds no access to
+        # the procurement connector, and asking there fails closed at Secret
+        # Manager -- correct behaviour that would leave the agent unable to
+        # evaluate its own reorder rule. `_find_by_reference` may use
+        # ProcureWrite because it runs inside Procurement Agent; this runs in
+        # both, so it takes the narrower grant that both actually hold.
+        detail = zoho_mcp.get_purchase_order(org, po_id)
+        if str(detail.get("status", "")).lower() in _NOT_COMING:
+            continue
+        for line in detail.get("line_items", []):
+            if str(line.get("item_id")) != item_id:
+                continue
+            ordered = line.get("quantity")
+            if ordered is None:
+                raise ZohoPolicyError(
+                    f"Purchase order {detail.get('purchaseorder_number', po_id)} has a "
+                    f"line for this item with no quantity. Refusing to guess how much "
+                    f"is on order."
+                )
+            # Cancelled counts as not coming; received has already arrived and is
+            # in the stock figure, so counting it again would double it.
+            outstanding = (float(ordered)
+                           - float(line.get("quantity_received") or 0)
+                           - float(line.get("quantity_cancelled") or 0))
+            incoming += max(outstanding, 0.0)
     return incoming
 
 
@@ -406,6 +452,48 @@ def vendor_for(item: dict[str, Any]) -> dict[str, Any]:
     return zoho_mcp.find_vendor(organization_id(), str(vendor_id))
 
 
+# A SKU-shaped token: two or more alphanumerics, then at least one hyphenated
+# group. The A2A executor used to hardcode `CK-[A-Z]+-\d+` here, which stopped
+# matching anything the moment the demo moved to DEMO-WIDGET-A: a sentence
+# naming the live SKU fell through to the default instead of failing.
+_SKU_PATTERN = re.compile(r"\b[A-Z0-9]{2,}(?:-[A-Z0-9]+)+\b")
+
+# SKU-shaped identifiers that are not SKUs.
+_NOT_A_SKU = ("PO-", "A2A-", "AGENT-")
+
+
+def sku_from_text(text: str, default: str) -> str:
+    """Pull a SKU out of a sentence, preferring the one this demo is configured for."""
+    upper = (text or "").upper()
+    if default and default.upper() in upper:
+        return default.upper()
+    for candidate in _SKU_PATTERN.findall(upper):
+        if not candidate.startswith(_NOT_A_SKU):
+            return candidate
+    return default
+
+
+def operation_id(subject: str, sku: str, quantity: int) -> str:
+    """A stable identifier for one business request, derived not invented.
+
+    The point of an idempotency key is that a retry produces the *same* key. A
+    fresh UUID per attempt cannot: it guarantees a second purchase order every
+    time a response is lost. So the identifier is a digest of what makes the
+    request what it is -- which human asked, for which SKU, in what quantity --
+    and any party holding those three can recompute it without coordination.
+
+    That deliberately collapses two identical requests from the same human into
+    one order. For a reorder that is the behaviour you want, and it is close to
+    free: a genuinely new order raised after the first one lands computes a
+    different quantity, because the reorder plan nets off the stock already
+    inbound on the first. Identical inputs therefore mean a retry far more often
+    than they mean a second order, and erring the other way writes real money
+    into Zoho twice.
+    """
+    material = f"{subject}|{sku.upper()}|{int(quantity)}"
+    return hashlib.sha256(material.encode()).hexdigest()[:12]
+
+
 def draft_hash(po: dict[str, Any]) -> str:
     """Approval binds to exactly these fields. Any mutation invalidates it."""
     approved = {
@@ -424,13 +512,19 @@ def draft_hash(po: dict[str, Any]) -> str:
 
 
 def create_draft(item_id: str, quantity: int, rate: float, vendor_id: str,
-                 reference_number: str, idempotency_key: str) -> dict[str, Any]:
+                 reference_number: str) -> dict[str, Any]:
     """Create a real purchase order in Zoho and submit it for human approval.
 
     Idempotency is by reference_number: before creating, we look for an existing
     order carrying the same reference. Zoho has no idempotency-key header, so the
     reference is the unique external key, and a retry after a lost response finds
     the original instead of raising a duplicate.
+
+    There used to be an `idempotency_key` parameter here that nothing read. It
+    was a leftover from the local emulator, which does honour an
+    `X-Idempotency-Key` header; against live Zoho it named a guarantee that only
+    `reference_number` actually provided. Build the reference from
+    `operation_id()` and the guarantee is real.
     """
     org = organization_id()
 
