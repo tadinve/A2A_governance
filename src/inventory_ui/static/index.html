@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory &amp; Purchasing</title>
+<style>
+  :root { --line:#e3e3e3; --muted:#5c5c5c; --ink:#141414; --ok:#0a7d38; --warn:#8a5a00; --bad:#b3261e; --chip:#f3f3f3; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#fff; color:var(--ink); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:28px 0 10px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 20px; }
+  button { font:inherit; padding:9px 16px; border:1px solid var(--ink); background:var(--ink); color:#fff; border-radius:6px; cursor:pointer; }
+  button.secondary { background:#fff; color:var(--ink); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  table { border-collapse:collapse; width:100%; font-size:15px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { font-weight:600; color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.03em; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:16px; margin-top:12px; }
+  .chip { display:inline-block; padding:2px 9px; border-radius:999px; background:var(--chip); font-size:12px; font-weight:600; letter-spacing:.02em; }
+  .chip.ok{background:#e6f4ea;color:var(--ok)} .chip.warn{background:#fdf3e2;color:var(--warn)} .chip.bad{background:#fce9e7;color:var(--bad)}
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .kv { display:grid; grid-template-columns:190px 1fr; gap:6px 14px; font-size:15px; }
+  .kv dt { color:var(--muted); } .kv dd { margin:0; }
+  .muted { color:var(--muted); }
+  .unresolved { color:var(--bad); font-weight:600; }
+  ol.activity { list-style:none; padding:0; margin:0; font-size:14px; }
+  ol.activity li { padding:6px 0; border-bottom:1px solid var(--line); display:flex; gap:12px; }
+  ol.activity time { color:var(--muted); flex:0 0 74px; font-variant-numeric:tabular-nums; }
+  .banner { padding:10px 14px; border-radius:6px; font-size:14px; margin-bottom:16px; }
+  .banner.bad { background:#fce9e7; color:var(--bad); }
+  .banner.info { background:#eef3fb; color:#123; }
+  details { margin-top:14px; font-size:14px; } summary { cursor:pointer; color:var(--muted); }
+  input { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:6px; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Inventory &amp; Purchasing</h1>
+  <p class="sub" id="context">Loading…</p>
+  <div id="alert"></div>
+
+  <section id="signin" hidden>
+    <div class="card">
+      <div class="row">
+        <input id="email" type="email" value="approver@example.com" size="26" aria-label="Email">
+        <input id="password" type="password" value="demo-approval-password" size="22" aria-label="Password">
+        <button id="signinBtn">Sign in</button>
+      </div>
+      <p class="muted" style="margin:10px 0 0">Approval requires an authenticated approver. Identity comes from the server session, never from the page.</p>
+    </div>
+  </section>
+
+  <section id="appview" hidden>
+    <div class="row">
+      <button id="checkBtn">Check Inventory</button>
+      <span id="runState" class="muted"></span>
+    </div>
+
+    <h2>Inventory</h2>
+    <div id="inventory"><p class="muted">No check run yet.</p></div>
+
+    <h2>Purchase order</h2>
+    <div id="draft"><p class="muted">No draft. A draft appears only when procurement returns one.</p></div>
+
+    <h2>Activity</h2>
+    <ol class="activity" id="activity"><li><span class="muted">Nothing yet.</span></li></ol>
+    <details>
+      <summary>Run details</summary>
+      <div id="details" class="muted" style="margin-top:8px"></div>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let runId = null, session = null, polling = null, busy = false;
+
+const fmt = n => (n === null || n === undefined) ? "—" : (typeof n === "number" ? (+n).toLocaleString() : n);
+const clock = ts => new Date(ts * 1000).toLocaleTimeString();
+
+function alertBox(msg, kind = "bad") {
+  $("alert").innerHTML = msg ? `<div class="banner ${kind}">${msg}</div>` : "";
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { credentials: "same-origin", ...opts });
+  if (res.status === 401) { session = null; render(); throw new Error("Sign in required"); }
+  const body = res.headers.get("content-type")?.includes("json") ? await res.json() : {};
+  if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+  return body;
+}
+
+function render() {
+  $("signin").hidden = !!session;
+  $("appview").hidden = !session;
+  $("context").textContent = session
+    ? `Signed in as ${session.subject} · scope ${session.scope_sku} · execution mode ${session.mode} · approval valid ${Math.round(session.approval_ttl_seconds / 60)} min`
+    : "Sign in to check inventory and approve purchase orders.";
+}
+
+async function boot() {
+  try { session = await api("/api/session"); } catch { session = null; }
+  render();
+  if (session) {
+    const active = await api("/api/inventory-checks/active");
+    if (active.run_id) { runId = active.run_id; startPolling(); }  // survives refresh
+  }
+}
+
+$("signinBtn").onclick = async () => {
+  alertBox("");
+  const form = new FormData();
+  form.append("email", $("email").value);
+  form.append("password", $("password").value);
+  try {
+    await api("/api/session", { method: "POST", body: form });
+    await boot();
+  } catch (e) { alertBox(e.message); }
+};
+
+$("checkBtn").onclick = async () => {
+  if (busy) return;
+  busy = true; $("checkBtn").disabled = true; alertBox("");
+  try {
+    const out = await api("/api/inventory-checks", { method: "POST" });
+    runId = out.run_id;
+    if (out.existing) alertBox("Returned your existing active run for this scope.", "info");
+    startPolling();
+  } catch (e) { alertBox(e.message); $("checkBtn").disabled = false; }
+  finally { busy = false; }
+};
+
+function startPolling() {
+  clearInterval(polling);
+  poll();
+  polling = setInterval(poll, 2000);   // 2s while active; stops when settled
+}
+
+async function poll() {
+  if (!runId) return;
+  let run;
+  try { run = await api(`/api/runs/${runId}`); }
+  catch (e) { alertBox(e.message); clearInterval(polling); return; }
+  draw(run);
+  const settled = !["DRAFTING"].includes(run.state) &&
+                  !run.drafts.some(d => ["SUBMITTING"].includes(d.state));
+  const waiting = run.state === "AWAITING_APPROVAL";
+  if (settled && !waiting) { clearInterval(polling); $("checkBtn").disabled = false; }
+  else if (waiting) { clearInterval(polling); polling = setInterval(poll, 8000); } // back off while waiting on a human
+}
+
+function draw(run) {
+  $("runState").textContent = `run ${run.run_id} · ${run.state}`;
+  $("details").innerHTML =
+    `<code>run_id ${run.run_id}</code><br><code>organization ${run.organization_id}</code><br>` +
+    `<code>execution mode ${run.mode}</code>` +
+    (run.error ? `<br><span class="unresolved">${run.error}</span>` : "");
+
+  // Inventory
+  const s = run.stock;
+  if (run.state === "DRAFTING" && !s) {
+    $("inventory").innerHTML = `<p class="muted">Checking…</p>`;
+  } else if (!s) {
+    $("inventory").innerHTML = `<p class="muted">No inventory data.</p>`;
+  } else {
+    const absent = v => (v === null || v === undefined)
+      ? `<span class="muted" title="Zoho returned no value. Not treated as zero.">not reported</span>` : fmt(v);
+    const below = s.available_stock !== null && s.available_stock < s.reorder_level;
+    $("inventory").innerHTML = `
+      <table>
+        <tr><th>Item</th><th>Available</th><th>Committed</th><th>On order</th><th>Reorder level</th><th>Status</th></tr>
+        <tr>
+          <td><strong>${s.sku ?? "—"}</strong><br><span class="muted">${s.name ?? ""}</span></td>
+          <td>${absent(s.available_stock)}</td>
+          <td>${absent(s.committed_stock)}</td>
+          <td>${absent(s.incoming_quantity)}</td>
+          <td>${absent(s.reorder_level)}</td>
+          <td>${below ? '<span class="chip warn">Below reorder</span>' : '<span class="chip ok">Sufficient</span>'}</td>
+        </tr>
+      </table>
+      ${run.state === "STOCK_SUFFICIENT" ? `<p style="margin:12px 0 0"><strong>Stock sufficient — no purchase order required.</strong></p>` : ""}
+      ${run.state === "UNRESOLVED" ? `<p class="unresolved" style="margin:12px 0 0">Unresolved: ${run.error ?? s.reason ?? "insufficient data"}</p>` : ""}
+      ${run.state === "FAILED" ? `<p class="unresolved" style="margin:12px 0 0">Inventory check failed: ${run.error}. This is a tool failure, not zero stock.</p>` : ""}`;
+  }
+
+  // Draft
+  if (!run.drafts.length) {
+    $("draft").innerHTML = `<p class="muted">No draft. A draft appears only when procurement returns one.</p>`;
+  } else {
+    $("draft").innerHTML = run.drafts.map(drawDraft).join("");
+    run.drafts.forEach(d => {
+      const a = $(`approve_${d.draft_id}`), r = $(`reject_${d.draft_id}`);
+      if (a) a.onclick = () => decide(d, "approve");
+      if (r) r.onclick = () => decide(d, "reject");
+    });
+  }
+
+  $("activity").innerHTML = run.activity.length
+    ? run.activity.map(a => `<li><time>${clock(a.at)}</time><span><strong>${a.step}</strong> ${a.detail ? `<span class="muted">${a.detail}</span>` : ""}</span></li>`).join("")
+    : `<li><span class="muted">Nothing yet.</span></li>`;
+}
+
+const CHIP = {
+  AWAITING_APPROVAL: ["warn", "Awaiting approval"], APPROVED: ["ok", "Approved"],
+  SUBMITTING: ["warn", "Submitting"], PLACED: ["ok", "Order created"],
+  REJECTED: ["bad", "Rejected"], EXPIRED: ["bad", "Expired"], FAILED: ["bad", "Failed"],
+  NEEDS_REVIEW: ["bad", "Needs review"], SUBMISSION_UNKNOWN: ["bad", "Submission outcome unknown"],
+};
+
+function drawDraft(d) {
+  const p = d.payload, [cls, label] = CHIP[d.state] || ["", d.state];
+  const line = p.lines[0];
+  const canDecide = d.state === "AWAITING_APPROVAL";
+  const expired = d.approval?.expired;
+  return `
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <strong>${p.vendor_name ?? "Vendor unresolved"}</strong>
+      <span class="chip ${cls}">${label}</span>
+    </div>
+    <dl class="kv" style="margin:14px 0 0">
+      <dt>Item</dt><dd>${line.sku} — ${line.name ?? ""}</dd>
+      <dt>Quantity</dt><dd>${fmt(line.quantity)}</dd>
+      <dt>Unit price</dt><dd>${fmt(line.rate)} ${p.currency}</dd>
+      <dt>Total</dt><dd><strong>${fmt(p.total)} ${p.currency}</strong></dd>
+      <dt>Reference</dt><dd><code>${p.reference_number}</code></dd>
+      <dt>Why</dt><dd>${p.reorder_reason}</dd>
+      ${d.provider_number ? `<dt>Zoho PO</dt><dd><code>${d.provider_number}</code> (id ${d.provider_po_id})</dd>` : ""}
+      ${d.provider_status ? `<dt>Zoho status</dt><dd><span class="chip">${d.provider_status}</span></dd>` : ""}
+      ${d.approval ? `<dt>Decision</dt><dd>${d.approval.decision} by ${d.approval.subject}${expired ? " · <span class='unresolved'>approval expired</span>" : ""}</dd>` : ""}
+      ${d.error ? `<dt>Error</dt><dd class="unresolved">${d.error}</dd>` : ""}
+    </dl>
+    ${p.provider_approval_available === false && d.provider_status ? `
+      <p class="muted" style="margin:12px 0 0">Zoho has no approval workflow configured for purchase orders on this organization, so the order remains <code>draft</code> there. Approval above was recorded and enforced by this application. It has not been issued or sent to the supplier.</p>` : ""}
+    ${canDecide ? `<div class="row" style="margin-top:16px">
+       <button id="approve_${d.draft_id}">Approve &amp; Place Order</button>
+       <button id="reject_${d.draft_id}" class="secondary">Reject</button>
+     </div>` : ""}
+  </div>`;
+}
+
+async function decide(d, action) {
+  const a = $(`approve_${d.draft_id}`), r = $(`reject_${d.draft_id}`);
+  if (a) a.disabled = true; if (r) r.disabled = true;   // server enforces this too
+  alertBox("");
+  try {
+    await api(`/api/purchase-orders/${d.draft_id}/${action}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expected_version: d.version,
+        expected_content_hash: d.content_hash,     // binds the decision to what was shown
+        idempotency_key: `${action}:${d.draft_id}:v${d.version}`,
+      }),
+    });
+  } catch (e) { alertBox(e.message); }
+  startPolling();
+}
+
+boot();
+</script>
+</body>
+</html>
