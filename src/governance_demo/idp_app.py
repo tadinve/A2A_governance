@@ -7,7 +7,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from opentelemetry import trace
 
 from .audit import record
-from .security import decode_token, extend_actor_chain, public_claims, request_token, scopes
+from .security import decode_token, public_claims, request_token, scopes
 from .settings import load_json
 from .telemetry import instrument_fastapi
 
@@ -135,12 +135,16 @@ def oauth_token(
         span.set_attribute("auth.subject", subject_claims["sub"])
         span.set_attribute("auth.audience", audience)
         span.set_attribute("auth.scope", scope)
+        # Both tokens go to the broker, which re-verifies them and derives the
+        # subject and actor chain itself. This service evaluated the same policy
+        # a moment ago; the broker not taking its word for the result is what
+        # keeps a compromised Identity Broker from minting arbitrary delegations.
         delegated = request_token(
-            subject=subject_claims["sub"],
             audience=audience,
             scopes=scope.split(),
             token_kind="delegated_access_token",
-            actor_chain=extend_actor_chain(client_id, subject_claims),
+            subject_token=subject_token,
+            actor_token=actor_token,
         )
     output_claims = decode_token(delegated, audience=audience)
     record(

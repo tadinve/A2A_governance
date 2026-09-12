@@ -1,7 +1,10 @@
 """Procurement Agent deployed to Agent Runtime with its own Agent Identity.
 
-It owns purchase-order drafting. It has no approval tool, by design: approval is
-a human act performed in the Zoho UI against an exact draft hash.
+It reports on purchase orders and explains the approval boundary. It has no
+approval tool, by design: approval is a human act performed in the Zoho UI
+against an exact draft hash. It also cannot draft: nothing reaches this
+deployment over A2A, so no human delegation ever arrives here, and the Auth
+Broker grants this principal no minting rule with which to invent one.
 """
 from __future__ import annotations
 
@@ -34,10 +37,17 @@ def show_my_identity() -> dict:
 
 
 def draft_purchase_order(sku: str, quantity: int) -> dict:
-    """Draft and submit a purchase order, returning the full delegation evidence.
+    """Attempt to draft a purchase order. This deployment is expected to fail.
 
-    Runs the real nested token exchange: the human subject is preserved while
-    each agent is added to the actor chain.
+    This is the non-A2A deployment. Nothing reaches it over A2A, so it is never
+    handed a human delegation, and it holds no broker permission to mint one:
+    `procurement-agent-adk-principal` has an empty `may_mint`. Drafting
+    therefore stops at the first token it needs, and the denial comes from the
+    Auth Broker rather than from a check this process could be talked out of.
+
+    An earlier version filled the gap by minting its own `demo-user` token and
+    carrying on, which produced a complete-looking delegation chain that no
+    human was ever at the top of.
     """
     sku = sku.upper()
     try:
@@ -49,48 +59,33 @@ def draft_purchase_order(sku: str, quantity: int) -> dict:
         return {"status": "error", "error_message": f"Unknown SKU {sku}"}
     if quantity <= 0:
         return {"status": "error", "error_message": "Quantity must be positive"}
-    try:
-        vendor = governance.vendor_for(item)
-    except Exception as exc:
-        return {"status": "error", "error_message": str(exc)}
-    rate = item.get("purchase_rate")
-    if rate is None:
-        return {"status": "error",
-                "error_message": f"{sku} has no purchase_rate in Zoho; refusing to invent a price."}
-
-    request_id = str(uuid.uuid4())
-    try:
-        # Hop 1: the A2A delegation this agent received from Inventory Agent.
-        received = governance.exchange_token(
-            "inventory-agent", governance.human_token(), AGENT_ID, "purchase.request")
-        # Hop 2: this agent's own delegation down into the procurement MCP.
-        mcp = governance.exchange_token(
-            AGENT_ID, received["access_token"], "zoho-procurement-mcp", "purchaseorder.create")
-    except governance.PolicyDenied as denied:
-        return {"status": "error", "error_message": str(denied)}
 
     try:
-        po = governance.create_draft(
-            item_id=item["item_id"], quantity=quantity, rate=float(rate),
-            vendor_id=vendor["contact_id"],
-            reference_number=f"AGENT-{request_id[:8]}", idempotency_key=request_id)
-    except Exception as exc:
-        return {"status": "error",
-                "error_message": f"Zoho refused the purchase order: {exc}"}
-
-    return {
-        "status": "success",
-        "purchase_order": po,
-        "human_approval": "REQUIRED. This agent cannot approve it.",
-        "delegation_evidence": {
-            "received_from_inventory_agent": received["claims"],
-            "issued_to_procurement_mcp": mcp["claims"],
-            "explanation": (
-                "sub stays the human across both hops. act nests "
-                "procurement-agent over inventory-agent, so the audit trail "
-                "shows who asked and which workloads acted."
+        governance.human_token()
+    except governance.SigningUnavailable as denied:
+        return {
+            "status": "refused",
+            "outcome": "DENIED, as designed",
+            "would_have_drafted": {"sku": sku, "quantity": quantity,
+                                   "item_id": item.get("item_id")},
+            "detail": str(denied),
+            "lesson": (
+                "This agent is authenticated by its own Agent Identity and is still "
+                "refused. It may extend a delegation it receives; it may not start "
+                "one. A purchase order has to originate with a human, reach "
+                "Inventory Agent, and arrive here over A2A carrying that token."
             ),
-        },
+            "where_to_run_it": (
+                "Ask Inventory Agent to reorder. It delegates to Procurement Agent "
+                "(A2A), which verifies the token before drafting anything."
+            ),
+        }
+    return {
+        "status": "error",
+        "error_message": (
+            "The Auth Broker minted a user token for this deployment. Its broker "
+            "client entry should carry an empty may_mint; the demo is misconfigured."
+        ),
     }
 
 
@@ -125,13 +120,13 @@ def explain_approval_boundary() -> dict:
 root_agent = Agent(
     name="procurement_agent",
     model=os.getenv("MODEL", "gemini-2.5-flash"),
-    description="Drafts governed Zoho purchase orders and reports their status.",
+    description="Reports on governed Zoho purchase orders; cannot originate one.",
     instruction=(
         "You are the Procurement Agent in an agent-governance demonstration. "
-        "Use draft_purchase_order to create a purchase order, "
-        "get_purchase_order_status to report on one, show_my_identity when asked "
-        "who you are or how you are authorized, and explain_approval_boundary when "
-        "asked about approval.\n\n"
+        "Use draft_purchase_order when asked to create a purchase order -- it "
+        "will be refused, and the refusal is the point; get_purchase_order_status "
+        "to report on one, show_my_identity when asked who you are or how you are "
+        "authorized, and explain_approval_boundary when asked about approval.\n\n"
         "Rules you must never break:\n"
         "1. You cannot approve a purchase order. You have no such tool. If asked to "
         "approve one, refuse and explain that approval is a human act in the Zoho UI.\n"
@@ -139,6 +134,9 @@ root_agent = Agent(
         "you create is pending_approval and nothing more.\n"
         "3. Never say that your identity authorizes you. Identity authenticates; IAM "
         "and delegation policy authorize.\n"
+        "4. This deployment is not reachable over A2A, so it never receives a human "
+        "delegation and cannot mint one. When drafting is refused, say that plainly "
+        "and point at Inventory Agent, which can delegate to the A2A deployment.\n"
         "When you show delegation evidence, point out that sub stays the human and "
         "act nests the agents."
     ),

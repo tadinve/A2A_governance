@@ -76,3 +76,16 @@ def test_delegation_key_is_not_stored_in_secret_manager():
         text = governance.read_text()
         assert "access_secret_version" not in text, f"{governance} still reads the key as a secret"
         assert "SecretManagerServiceClient" not in text
+
+
+def test_the_a2a_write_path_cannot_manufacture_a_human_delegation():
+    """Delegation is a precondition on the deployed write path, not an option.
+
+    The earlier executor minted a fresh demo-user chain when no token arrived,
+    so a caller that simply omitted the delegation got a purchase order anyway.
+    """
+    source = (CLOUD / "procurement_a2a" / "executor.py").read_text()
+    assert "human_token" not in source, "the A2A path must not mint a human grant"
+    assert "No delegated token presented" in source, "a missing delegation must deny"
+    # The onward exchange may be built from the received token and nothing else.
+    assert 'exchange_token(\n                AGENT_ID, subject_token,' in source

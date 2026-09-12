@@ -4,8 +4,11 @@
 
 - RS256 human/agent JWT signatures; issuer, expiry, audience, and scope validation
 - delegation signing isolated in an Auth Broker; no other component can sign
-- RFC 8693-shaped subject/actor exchange with nested `act` provenance
-- separate Inventory Agent and Procurement Agent credentials
+- RFC 8693-shaped subject/actor exchange with nested `act` provenance, where the
+  broker derives `sub` and `act` from verified tokens rather than from the request
+- delegation required, not optional, on the deployed A2A write path
+- separate Inventory Agent and Procurement Agent credentials, and a separate
+  broker authorization identity for each deployed principal
 - route policy at a gateway
 - A2A-style Agent Card and JSON-RPC messages
 - MCP-style narrow `tools/call` interfaces
@@ -68,6 +71,54 @@ issues to us as bearer material we must store verbatim. Those move to Auth
 Manager once it brokers third-party OAuth credentials, at which point the demo
 holds no long-lived readable secret at all. The delegation private key never
 belonged in Secret Manager, because KMS can hold it in a form nobody can read.
+
+## What the broker will sign, and what it works out for itself
+
+A broker that signs whatever subject and actor chain its caller sends is an
+expensive way of notarising the caller's own claims. Authentication tells you
+*which* agent asked; it says nothing about whether the grant it describes ever
+existed. So for a delegated token the request body carries evidence only:
+
+| Field | Who decides it |
+|---|---|
+| `sub` | read from the subject token, after the broker verifies it against its own key |
+| `act` | the caller's authenticated identity, nested over the chain the subject token already carried |
+| `aud`, `scope` | requested, then checked against both the delegation policy and the minting policy |
+| `exp` | requested, then clamped so a delegation never outlives the grant it extends |
+
+There is no parameter for asserting a subject or an actor chain, and the request
+model rejects unknown fields, so a stale caller sending the old `subject` plus
+`actor_chain` shape fails loudly instead of being quietly ignored.
+
+Two ways the acting identity becomes known, and neither is "the caller said so".
+A deployed agent authenticates with its own Agent Identity, and its broker client
+entry names the single delegation actor that principal may act as. The Identity
+Broker is a delegation service acting for several agents rather than being one,
+so it presents the agent's own credential and the actor is read from that
+token's verified `sub`.
+
+## One principal, one set of minting rights
+
+Each deployed reasoning engine has its own entry in `config/broker_clients.json`
+and its own rules in `config/policies.json`. Grouping them under a shared client
+would authenticate three distinct workloads and then decline to use the answer.
+
+| Broker client | May mint | Cannot |
+|---|---|---|
+| `inventory-agent-principal` | the demo human grant; delegations to the inventory connector and to Procurement Agent | reach the procurement connector at all |
+| `procurement-agent-principal` | delegations to the procurement connector, extended from a grant it was handed | mint a human grant, or extend a grant addressed to Inventory Agent |
+| `procurement-agent-adk-principal` | nothing | draft anything; the non-A2A deployment receives no delegation and can invent none |
+
+The second row is what closes the A2A write path. Procurement Agent now refuses
+a `create_po` that arrives without a delegated token, and if that check were
+ever removed the broker would still refuse to mint the human grant the old
+fallback depended on. Two independent controls, in two different components.
+
+**Still open.** The human at the top of the chain is `demo-user`, a claim this
+demo mints and signs, not an identity anything authenticated. Inventory Agent
+retains the right to mint it because it is the agent a human talks to directly.
+Replacing that with IAP-authenticated sign-in is the remaining gap, and until it
+closes, the nested `act` chain is evidence about *workloads*, not about a person.
 
 ## Important boundaries
 

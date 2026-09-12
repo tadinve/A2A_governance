@@ -138,7 +138,7 @@
       "max_lifetime_seconds": 300
     },
     {
-      "minter": "agent-runtime",
+      "minter": "inventory-agent-principal",
       "token_kind": "user_access_token",
       "audiences": [
         "inventory-agent"
@@ -149,7 +149,7 @@
       "max_lifetime_seconds": 900
     },
     {
-      "minter": "agent-runtime",
+      "minter": "inventory-agent-principal",
       "token_kind": "delegated_access_token",
       "audiences": [
         "zoho-inventory-mcp"
@@ -160,7 +160,7 @@
       "max_lifetime_seconds": 300
     },
     {
-      "minter": "agent-runtime",
+      "minter": "inventory-agent-principal",
       "token_kind": "delegated_access_token",
       "audiences": [
         "procurement-agent"
@@ -172,7 +172,7 @@
       "max_lifetime_seconds": 300
     },
     {
-      "minter": "agent-runtime",
+      "minter": "procurement-agent-principal",
       "token_kind": "delegated_access_token",
       "audiences": [
         "zoho-procurement-mcp"

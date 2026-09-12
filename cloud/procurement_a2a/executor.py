@@ -53,10 +53,24 @@ class ProcurementAgentExecutor(AgentExecutor):
         request = _parse(context.get_user_input())
         action = request.get("action", "create_po")
 
-        # The caller may present a delegated token. When it does, it is verified
-        # for real: signature, issuer, audience, and scope.
+        # A write requires a human delegation. Not "verifies one if offered" --
+        # requires one. The earlier version treated the token as optional and
+        # minted a substitute human grant when it was missing, which meant the
+        # governance held only for callers that chose to participate in it.
         delegation_report: dict = {"presented": False}
         subject_token = request.get("delegated_token")
+        if not subject_token and action == "create_po":
+            await event_queue.enqueue_event(new_text_message(_reply({
+                "status": "denied",
+                "reason": "No delegated token presented",
+                "note": ("Drafting a purchase order requires a human delegation "
+                         "this agent received. It cannot mint one: the Auth "
+                         "Broker's minting policy gives this principal no rule "
+                         "for a user_access_token, so there is no fallback to "
+                         "fall back to."),
+                "agent_identity": SPIFFE_ID,
+            })))
+            return
         if subject_token:
             try:
                 claims = governance.decode_token(subject_token, audience=AGENT_ID)
@@ -151,12 +165,10 @@ class ProcurementAgentExecutor(AgentExecutor):
 
         request_id = str(uuid.uuid4())
         try:
-            # This agent's own delegation down into the procurement MCP.
-            base = subject_token or governance.exchange_token(
-                "inventory-agent", governance.human_token(), AGENT_ID,
-                "purchase.request")["access_token"]
+            # This agent's own delegation down into the procurement MCP, always
+            # extended from the token it was handed. There is no other input.
             mcp = governance.exchange_token(
-                AGENT_ID, base, "zoho-procurement-mcp", "purchaseorder.create")
+                AGENT_ID, subject_token, "zoho-procurement-mcp", "purchaseorder.create")
         except governance.PolicyDenied as denied:
             await event_queue.enqueue_event(new_text_message(_reply({
                 "status": "denied", "reason": str(denied)})))

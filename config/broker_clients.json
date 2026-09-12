@@ -1,33 +1,54 @@
 {
   "identity-broker": {
+    "description": "The local control plane's delegation service. It acts for several agents rather than being one, so its actor is read from the agent credential it presents, not from this entry.",
     "client_secret": "identity-broker-demo-secret",
     "principal": "spiffe://demo.local/services/identity-broker",
+    "may_present_actor_token": true,
     "may_mint": [
       "user_access_token",
       "agent_credential",
       "delegated_access_token"
     ]
   },
-  "agent-runtime": {
-    "description": "Deployed Agent Runtime agents, authenticated by Agent Identity and admitted by roles/run.invoker on the broker service.",
+  "inventory-agent-principal": {
+    "description": "Inventory Agent on Agent Runtime (reasoningEngine 3222129270558031872). The only deployed principal that may start a delegation chain, because it is the one a human talks to. That human is still 'demo-user' rather than an authenticated identity; see SECURITY_NOTES.md.",
     "allowed_principals": [
-      "1882730593880375296",
-      "2745873609963601920",
       "3222129270558031872",
-      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
-      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
       "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
-      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
-      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
       "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872",
-      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
-      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
       "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/3222129270558031872"
     ],
+    "delegation_actor": "inventory-agent",
     "may_mint": [
       "user_access_token",
       "delegated_access_token"
     ],
+    "basic_auth_enabled": false
+  },
+  "procurement-agent-principal": {
+    "description": "Procurement Agent (A2A) on Agent Runtime (reasoningEngine 1882730593880375296). It may extend a delegation it was handed and nothing else: no user_access_token rule exists for it, so it cannot manufacture the human grant it is supposed to receive over A2A.",
+    "allowed_principals": [
+      "1882730593880375296",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/1882730593880375296"
+    ],
+    "delegation_actor": "procurement-agent",
+    "may_mint": [
+      "delegated_access_token"
+    ],
+    "basic_auth_enabled": false
+  },
+  "procurement-agent-adk-principal": {
+    "description": "The non-A2A Procurement Agent deployment (reasoningEngine 2745873609963601920). Same code base, no minting rights at all: it cannot originate a chain and has no inbound A2A delegation to extend, so it reads purchase orders and refuses to draft. Listed with an empty may_mint rather than omitted, so the denial is a stated policy and not an accident of configuration.",
+    "allowed_principals": [
+      "2745873609963601920",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/611427964532/locations/us-central1/reasoningEngines/2745873609963601920"
+    ],
+    "delegation_actor": "procurement-agent",
+    "may_mint": [],
     "basic_auth_enabled": false
   }
 }

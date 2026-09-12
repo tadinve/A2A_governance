@@ -13,7 +13,18 @@ this one control becomes genuine.
 | Agent | Folder | Tools | Cannot |
 |---|---|---|---|
 | Inventory Agent | `inventory_agent/` | `check_stock`, `request_reorder_from_procurement_agent`, `attempt_to_create_purchase_order_directly`, `show_my_identity` | create a purchase order |
-| Procurement Agent | `procurement_agent/` | `draft_purchase_order`, `get_purchase_order_status`, `explain_approval_boundary`, `show_my_identity` | approve anything |
+| Procurement Agent | `procurement_agent/` | `draft_purchase_order`, `get_purchase_order_status`, `explain_approval_boundary`, `show_my_identity` | approve anything -- or, in this non-A2A deployment, draft anything either |
+
+`procurement_agent/` is the ADK deployment; nothing reaches it over A2A, so it
+never receives a human delegation. Its broker client grants it no minting rights
+at all, so `draft_purchase_order` demonstrates the denial rather than working
+around it. Drafting happens in `procurement_a2a/`, which is handed a delegation
+by Inventory Agent.
+
+Each deployment authenticates as its own broker client -- `inventory-agent-principal`,
+`procurement-agent-principal`, `procurement-agent-adk-principal` -- with its own
+minting rules. Three attested identities collapsed into one policy identity would
+authenticate each workload and then ignore which one it was.
 
 Each folder carries `.agent_engine_config.json` containing
 `{"identity_type": "AGENT_IDENTITY"}`, which is what causes Agent Runtime to
@@ -101,9 +112,17 @@ Verified with `cloud/a2a_send.py` and from Inventory Agent in the runtime:
 |---|---|
 | agent card | 200, both skills |
 | valid delegated token | 200, PO drafted, `pending_approval` |
+| **no delegated token** | **denied, `No delegated token presented`** |
 | forged token | denied, signature rejected |
 | wrong scope | denied, `lacks the 'purchase.request' scope` |
 | asked to approve | refused, no such capability |
+
+The third row used to be a 200. The executor treated the delegation as optional
+and minted a substitute `demo-user` chain when none arrived, so a caller that
+simply left the token out got a real purchase order with a complete-looking
+provenance chain behind it. A write now requires the token, and the Auth Broker
+grants this principal no rule with which to mint the replacement, so removing
+the check would not reopen the path.
 
 The delegated token is verified **cryptographically** by Procurement Agent --
 signature, issuer, audience and scope. The human `sub` and the nested `act`

@@ -29,11 +29,12 @@ def _fetch_verification_key(force_refresh: bool = False) -> bytes:
 
 def request_token(
     *,
-    subject: str,
     audience: str,
     scopes: list[str],
     token_kind: str,
-    actor_chain: dict[str, Any] | None = None,
+    subject: str | None = None,
+    subject_token: str | None = None,
+    actor_token: str | None = None,
     lifetime_seconds: int = 300,
 ) -> str:
     """Ask the Auth Broker to mint a token.
@@ -42,26 +43,35 @@ def request_token(
     local signing path: no caller of this module holds key material, so a
     compromised service can request what the broker's minting policy allows it
     and cannot forge anything else.
+
+    A delegated token is requested by handing over the ``subject_token`` being
+    extended, and the ``actor_token`` of the agent doing the extending. The
+    broker derives ``sub`` and ``act`` from those itself; there is no parameter
+    here for asserting either, because asserting them was the hole.
     """
     credentials = base64.b64encode(
         f"{BROKER_CLIENT_ID}:{BROKER_CLIENT_SECRET}".encode()
     ).decode()
+    payload: dict[str, Any] = {
+        "audience": audience,
+        "scopes": scopes,
+        "token_kind": token_kind,
+        "lifetime_seconds": lifetime_seconds,
+    }
+    for name, value in (("subject", subject), ("subject_token", subject_token),
+                        ("actor_token", actor_token)):
+        if value is not None:
+            payload[name] = value
     response = httpx.post(
         f"{AUTH_BROKER_URL}/sign",
-        json={
-            "subject": subject,
-            "audience": audience,
-            "scopes": scopes,
-            "token_kind": token_kind,
-            "actor_chain": actor_chain,
-            "lifetime_seconds": lifetime_seconds,
-        },
+        json=payload,
         headers={"Authorization": f"Basic {credentials}"},
         timeout=15,
     )
     if response.status_code != 200:
         raise PermissionError(
-            f"Auth Broker refused to mint this token: HTTP {response.status_code}"
+            f"Auth Broker refused to mint this token: HTTP {response.status_code} "
+            f"{response.text[:200]}"
         )
     return response.json()["token"]
 

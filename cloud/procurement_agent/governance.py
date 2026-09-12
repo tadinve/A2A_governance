@@ -31,8 +31,6 @@ class SigningUnavailable(Exception):
 
 AUTH_BROKER_URL = os.getenv("AUTH_BROKER_URL", "").rstrip("/")
 KMS_SIGNING_KEY = os.getenv("KMS_SIGNING_KEY", "")
-BROKER_CLIENT_ID = os.getenv("BROKER_CLIENT_ID", "")
-BROKER_CLIENT_SECRET = os.getenv("BROKER_CLIENT_SECRET", "")
 
 
 def _load_verification_key() -> bytes:
@@ -113,12 +111,20 @@ def _broker_identity_token(audience: str) -> tuple[str, str]:
         "Could not obtain an ID token for the Auth Broker: " + "; ".join(errors))
 
 
-def request_token(*, subject: str, audience: str, scopes: list[str], token_kind: str,
-                  actor_chain: dict[str, Any] | None = None,
+def request_token(*, audience: str, scopes: list[str], token_kind: str,
+                  subject: str | None = None, subject_token: str | None = None,
                   lifetime_seconds: int = 300) -> str:
     """Ask the Auth Broker to sign a token. This agent holds no signing key.
 
-    The broker re-checks its own minting policy, so a compromised agent can
+    Two things the agent deliberately cannot say here:
+
+    * *who the subject is* -- for a delegated token it hands over the token it
+      received and the broker reads ``sub`` out of it after verifying it;
+    * *who is acting* -- the broker derives that from the Agent Identity this
+      request is authenticated with, so the actor chain records the workload
+      Google attested, not a string this process chose.
+
+    The broker re-checks its own minting policy too, so a compromised agent can
     obtain only what policy already allows it and cannot forge anything else.
     """
     if not AUTH_BROKER_URL:
@@ -128,11 +134,14 @@ def request_token(*, subject: str, audience: str, scopes: list[str], token_kind:
         )
     import requests as _requests
 
-    payload = {
-        "subject": subject, "audience": audience, "scopes": scopes,
-        "token_kind": token_kind, "actor_chain": actor_chain,
+    payload: dict[str, Any] = {
+        "audience": audience, "scopes": scopes, "token_kind": token_kind,
         "lifetime_seconds": lifetime_seconds,
     }
+    if subject is not None:
+        payload["subject"] = subject
+    if subject_token is not None:
+        payload["subject_token"] = subject_token
     id_token_value, method = _broker_identity_token(AUTH_BROKER_URL)
     try:
         response = _requests.post(
@@ -156,13 +165,6 @@ def decode_token(token: str, audience: str | None = None) -> dict[str, Any]:
 
 def token_scopes(claims: dict[str, Any]) -> set[str]:
     return set(str(claims.get("scope", "")).split())
-
-
-def extend_actor_chain(actor: str, subject_claims: dict[str, Any]) -> dict[str, Any]:
-    chain: dict[str, Any] = {"sub": actor}
-    if subject_claims.get("act"):
-        chain["act"] = subject_claims["act"]
-    return chain
 
 
 def public_claims(claims: dict[str, Any]) -> dict[str, Any]:
@@ -208,14 +210,26 @@ def exchange_token(actor: str, subject_token: str, target_audience: str, scope: 
             f"'{target_audience}'. This is the same denial the local Identity "
             f"Broker returns with HTTP 403."
         )
-    delegated = request_token(subject=subject_claims["sub"], audience=target_audience,
-                            scopes=scope.split(), token_kind="delegated_access_token",
-                            actor_chain=extend_actor_chain(actor, subject_claims))
+    # The subject token goes to the broker whole. Decoding it above told this
+    # agent whether to bother asking; it is the broker's own verification of the
+    # same token, plus the Agent Identity on the request, that decides the
+    # `sub` and `act` the signature actually covers.
+    delegated = request_token(audience=target_audience, scopes=scope.split(),
+                              token_kind="delegated_access_token",
+                              subject_token=subject_token)
     return {"access_token": delegated, "claims": public_claims(decode_token(delegated, audience=target_audience))}
 
 
 def human_token(user_id: str = "demo-user") -> str:
-    """The human sign-in that starts every delegation chain."""
+    """The human sign-in that starts every delegation chain.
+
+    Only the Inventory Agent principal may mint this, because it is the only
+    deployed agent a human talks to directly. A procurement deployment calling
+    it is refused by the broker, which is what stops an agent downstream of the
+    human from inventing a grant it should have been handed. The subject is
+    still a claim this demo mints rather than an identity anything
+    authenticated; that gap is real and documented in SECURITY_NOTES.md.
+    """
     return request_token(subject=user_id, audience="inventory-agent",
                        scopes=["assistant.inventory"], token_kind="user_access_token",
                        lifetime_seconds=900)
