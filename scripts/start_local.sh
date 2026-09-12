@@ -11,6 +11,10 @@ fi
 
 .venv/bin/python scripts/init_demo.py --reset-evidence
 export PYTHONPATH="$DEMO_ROOT/src"
+# Spans go to evidence/*.spans.jsonl by default so the demo stays offline.
+# Set TRACE_EXPORTER=gcp (with ADC and GOOGLE_CLOUD_PROJECT) to also send them
+# to Cloud Trace and see the local delegation chain next to the deployed agents.
+export TRACE_EXPORTER="${TRACE_EXPORTER:-file}"
 
 services=(
   "auth_broker_app:8108:auth-broker"

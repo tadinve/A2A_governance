@@ -17,7 +17,7 @@ from fastapi import FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import auth, executor, store
+from . import auth, executor, security_plane, store
 from .models import (
     DEFAULT_APPROVAL_TTL_SECONDS,
     PO_APPROVED,
@@ -287,6 +287,17 @@ def reject(request: Request, draft_id: str, body: Decision) -> dict:
     store.set_run_state(run["run_id"], RUN_COMPLETE)
     store.log(run["run_id"], "rejected", f"{draft_id} by {user['subject']}")
     return {"draft_id": draft_id, "state": PO_REJECTED, "approval_id": approval_id}
+
+
+@app.get("/api/security-plane")
+def security_plane_view(request: Request) -> dict:
+    """Who may do what, read live from the project's IAM policies.
+
+    Requires a session: it names principals and their grants, which is not
+    something to publish anonymously even though it contains no secrets.
+    """
+    auth.current_user(request)
+    return security_plane.collect()
 
 
 # --- task-only processing ---------------------------------------------------

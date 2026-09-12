@@ -31,9 +31,20 @@ SECRETS = {
 }
 ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 
-# Only agents that actually talk to Zoho. Granting more broadly would be the
-# over-broad binding this repository argues against.
-ZOHO_AGENTS = ("Inventory Agent", "Procurement Agent (A2A)", "Procurement Agent")
+# Access is per secret, not per project. The ProcureWrite credential can create
+# purchase orders, so Inventory Agent must not be able to read it: the
+# delegation policy already refuses it purchaseorder.create, and a credential it
+# could read would be a way around that policy rather than a defence in depth.
+#
+# Granting both secrets to every agent -- which an earlier revision of this
+# script did -- is precisely the over-broad binding this repository argues
+# against, and it is invisible until someone reads the IAM policy.
+SECRET_AGENTS = {
+    "zoho-invread-mcp-url": ("Inventory Agent", "Procurement Agent (A2A)",
+                             "Procurement Agent"),
+    "zoho-procurewrite-mcp-url": ("Procurement Agent (A2A)", "Procurement Agent"),
+}
+ZOHO_AGENTS = tuple(sorted({a for v in SECRET_AGENTS.values() for a in v}))
 
 
 def _project() -> str:
@@ -135,21 +146,35 @@ def main() -> int:
             print(f"{secret_id}: added version {version.name.split('/')[-1]}")
 
         if principals:
+            entitled = SECRET_AGENTS[secret_id]
             policy = client.get_iam_policy(request={"resource": name})
             binding = next((b for b in policy.bindings if b.role == ACCESSOR_ROLE), None)
             if binding is None:
                 binding = policy.bindings.add()
                 binding.role = ACCESSOR_ROLE
-            added = [label for label, principal in principals.items()
-                     if principal not in binding.members]
-            for label, principal in principals.items():
-                if principal not in binding.members:
-                    binding.members.append(principal)
-            if added:
+
+            wanted = {principals[label] for label in entitled if label in principals}
+            known = set(principals.values())
+            added = sorted(p for p in wanted if p not in binding.members)
+            # Anything granted that is not entitled is removed, so re-running
+            # this script converges on least privilege instead of only adding.
+            removed = sorted(m for m in binding.members if m in known and m not in wanted)
+            for principal in added:
+                binding.members.append(principal)
+            for principal in removed:
+                binding.members.remove(principal)
+            if added or removed:
                 client.set_iam_policy(request={"resource": name, "policy": policy})
-                print(f"{secret_id}: granted {ACCESSOR_ROLE} to {', '.join(added)}")
+                label_of = {v: k for k, v in principals.items()}
+                if added:
+                    print(f"{secret_id}: granted to "
+                          f"{', '.join(label_of.get(p, p) for p in added)}")
+                if removed:
+                    print(f"{secret_id}: REVOKED from "
+                          f"{', '.join(label_of.get(p, p) for p in removed)}")
             else:
-                print(f"{secret_id}: all agents already have access")
+                print(f"{secret_id}: bindings already least-privilege "
+                      f"({len(entitled)} entitled)")
 
     print("\nIAM changes take a few minutes to propagate.")
     return 0

@@ -70,7 +70,7 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA_EMAIL" \
   --no-allow-unauthenticated \
-  --set-env-vars "DELEGATION_SIGNER=kms,KMS_SIGNING_KEY=${KEY}/cryptoKeyVersions/1,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},AUTH_BROKER_AUDIENCE=https://a2a-auth-broker-611427964532.${REGION}.run.app" \
+  --set-env-vars "DELEGATION_SIGNER=kms,TRACE_EXPORTER=gcp,KMS_SIGNING_KEY=${KEY}/cryptoKeyVersions/1,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},AUTH_BROKER_AUDIENCE=https://a2a-auth-broker-611427964532.${REGION}.run.app" \
   --min-instances 0 --max-instances 3 --timeout 60 \
   --quiet
 

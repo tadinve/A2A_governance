@@ -66,6 +66,10 @@
     <h2>Purchase order</h2>
     <div id="draft"><p class="muted">No draft. A draft appears only when procurement returns one.</p></div>
 
+    <h2>Security plane</h2>
+    <p class="muted" style="margin:0 0 10px;font-size:14px">Who is authorized to do what, read live from this project's IAM policies. Not a description of intent &mdash; if a binding changes, this changes.</p>
+    <div id="plane"><p class="muted">Loading…</p></div>
+
     <h2>Activity</h2>
     <ol class="activity" id="activity"><li><span class="muted">Nothing yet.</span></li></ol>
     <details>
@@ -199,6 +203,8 @@ function draw(run) {
     });
   }
 
+  loadPlane();
+
   $("activity").innerHTML = run.activity.length
     ? run.activity.map(a => `<li><time>${clock(a.at)}</time><span><strong>${a.step}</strong> ${a.detail ? `<span class="muted">${a.detail}</span>` : ""}</span></li>`).join("")
     : `<li><span class="muted">Nothing yet.</span></li>`;
@@ -241,6 +247,53 @@ function drawDraft(d) {
        <button id="reject_${d.draft_id}" class="secondary">Reject</button>
      </div>` : ""}
   </div>`;
+}
+
+let planeLoaded = false;
+async function loadPlane() {
+  if (planeLoaded) return;
+  planeLoaded = true;
+  let p;
+  try { p = await api("/api/security-plane"); }
+  catch { $("plane").innerHTML = `<p class="muted">Security plane unavailable.</p>`; return; }
+
+  const list = (xs, cls) => xs.map(x => `<li class="${cls}">${x}</li>`).join("");
+  const grants = `
+    <table style="margin-bottom:14px">
+      <tr><th>Grant</th><th>Held by</th></tr>
+      <tr><td><code>cloudkms.signerVerifier</code><br><span class="muted">may ask KMS to sign</span></td>
+          <td>${p.kms_signers.length ? p.kms_signers.join("<br>") : '<span class="unresolved">none</span>'}</td></tr>
+      <tr><td><code>cloudkms.publicKeyViewer</code><br><span class="muted">may verify, cannot sign</span></td>
+          <td>${p.kms_verifiers.join("<br>") || "—"}</td></tr>
+      <tr><td><code>secretAccessor</code> on ProcureWrite<br><span class="muted">credential that can create POs</span></td>
+          <td>${p.secret_accessors["zoho-procurewrite-mcp-url"].join("<br>") || "—"}</td></tr>
+      <tr><td><code>secretAccessor</code> on InvRead<br><span class="muted">read-only credential</span></td>
+          <td>${p.secret_accessors["zoho-invread-mcp-url"].join("<br>") || "—"}</td></tr>
+      <tr><td><code>run.invoker</code> on Auth Broker<br><span class="muted">may ask for a token</span></td>
+          <td>${p.broker_invokers.join("<br>") || "—"}</td></tr>
+    </table>`;
+
+  const agents = p.agents_error
+    ? `<p class="unresolved">Could not list deployed agents (${p.agents_error}). This is a failed query, not an absence of agents.</p>`
+    : `<p class="muted" style="font-size:14px">Deployed agent identities: ${p.agents.map(a => `${a.name} <code>${a.resource_id}</code>`).join(" · ") || "none"}</p>`;
+
+  const players = p.players.map(pl => `
+    <div class="card" style="margin-top:10px">
+      <div class="row" style="justify-content:space-between">
+        <strong>${pl.player}</strong><span class="muted" style="font-size:13px">${pl.identity}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:10px;font-size:14px">
+        <div><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.03em">May</div>
+             <ul style="margin:6px 0 0;padding-left:18px">${list(pl.may, "")}</ul></div>
+        <div><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.03em">May not</div>
+             <ul style="margin:6px 0 0;padding-left:18px;color:var(--bad)">${list(pl.may_not, "")}</ul></div>
+      </div>
+      <p class="muted" style="margin:10px 0 0;font-size:13px">Evidence: ${pl.evidence}</p>
+    </div>`).join("");
+
+  $("plane").innerHTML =
+    `<p class="muted" style="font-size:13px">project <code>${p.project}</code> · key <code>${p.key}</code> · read ${p.live ? "live" : "<span class='unresolved'>unavailable</span>"}</p>`
+    + grants + agents + players;
 }
 
 async function decide(d, action) {
