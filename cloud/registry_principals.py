@@ -99,12 +99,24 @@ def main() -> int:
     parser.add_argument("--location", default=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
     parser.add_argument("--write-clients", action="store_true",
                         help="regenerate config/broker_clients.json from the registry")
+    parser.add_argument("--print-principal", metavar="DISPLAY_NAME",
+                        help="print just this agent's bare principal:// URI and exit")
     args = parser.parse_args()
     if not args.project:
         print("Set GOOGLE_CLOUD_PROJECT or pass --project", file=sys.stderr)
         return 2
 
     found = registered_agents(args.project, args.location)
+
+    if args.print_principal:
+        agent = found.get(args.print_principal)
+        principal = principal_of(agent) if agent else None
+        if not principal:
+            print(f"not registered: {args.print_principal}", file=sys.stderr)
+            return 1
+        print(principal)
+        return 0
+
     clients: dict[str, dict] = {
         "identity-broker": {
             "description": ("The local control plane's delegation service. It acts for "

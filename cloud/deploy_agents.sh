@@ -19,6 +19,7 @@ ONLY="${1:-both}"
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 info() { printf '    %s\n' "$1"; }
+die()  { echo "ERROR: $*" >&2; exit 1; }
 warn() { printf '    \033[33mwarning:\033[0m %s\n' "$1"; }
 
 if [[ -z "$PROJECT_ID" ]]; then
@@ -62,9 +63,21 @@ AUTH_BROKER_URL="${AUTH_BROKER_URL:-}"
 ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
 DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
 ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\":100,\"min_order_quantity\":1}}}"
-if [[ -z "$KMS_SIGNING_KEY" ]]; then
-  info "KMS_SIGNING_KEY is unset; run cloud/setup_kms_signing.py and export it"
-fi
+# Agent Runtime rejects a deployment outright if any declared env var is an
+# empty string ("Required field is not set", identified only by index, not
+# name) -- these two are essential to every path in the agent, so an empty
+# value here is not something to warn about and continue past.
+[[ -n "$KMS_SIGNING_KEY" ]] || die "KMS_SIGNING_KEY is unset. Run cloud/setup_kms_signing.py and export it."
+[[ -n "$AUTH_BROKER_URL" ]] || die "AUTH_BROKER_URL is unset. Deploy the Auth Broker first and export its URL."
+
+# Only emitted when non-empty. ZOHO_ORGANIZATION_ID, unset, is not an error --
+# governance.py auto-discovers it from Zoho when exactly one org exists -- but
+# writing it as an empty line would be, for the reason above.
+# `|| true` matters here, not just style: under `set -e`, a bare function call
+# whose last command is a false `&&` (nothing to emit) would otherwise exit the
+# whole script right here, silently -- no die(), no message, just gone. That
+# is exactly the failure this had the first time it was written.
+emit_if_set() { [[ -n "${2:-}" ]] && echo "$1=$2" || true; }
 
 step "Enabling APIs"
 gcloud services enable aiplatform.googleapis.com storage.googleapis.com \
@@ -106,7 +119,7 @@ if [[ "$ONLY" == "both" || "$ONLY" == "procurement" ]]; then
     echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
     echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
     echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
-    echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
+    emit_if_set ZOHO_ORGANIZATION_ID "$ZOHO_ORGANIZATION_ID"
     echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
     echo "DEMO_SKU=$DEMO_SKU"
   } > "$STAGED_P"
@@ -129,12 +142,14 @@ if [[ "$ONLY" == "both" || "$ONLY" == "inventory" ]]; then
   cleanup() { rm -f "$STAGED"; }
   trap cleanup EXIT
   {
-    echo "PROCUREMENT_A2A=$PROCUREMENT"
+    # Left out entirely, not sent empty, when the A2A deployment does not exist
+    # yet (this script can be run with `inventory` alone before it does).
+    emit_if_set PROCUREMENT_A2A "$PROCUREMENT"
     echo "GOOGLE_CLOUD_LOCATION=$REGION"
     echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
     echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
     echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
-    echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
+    emit_if_set ZOHO_ORGANIZATION_ID "$ZOHO_ORGANIZATION_ID"
     echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
     echo "DEMO_SKU=$DEMO_SKU"
   } > "$STAGED"

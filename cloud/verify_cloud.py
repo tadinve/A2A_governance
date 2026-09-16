@@ -138,7 +138,7 @@ def main() -> int:
     required = ["Procurement Agent (A2A)", "Inventory Agent", "Procurement Agent"]
     for name in required:
         if name not in agents:
-            print(f"not registered: {name}. Run cloud/bootstrap.sh first.", file=sys.stderr)
+            print(f"not registered: {name}. Run deploy_to_gcp.sh first.", file=sys.stderr)
             return 2
     a2a_resource = agents["Procurement Agent (A2A)"]
 

@@ -47,6 +47,42 @@ Raw bearer credentials are never printed. The script also proves that direct cal
 
 Swagger UI is at `http://127.0.0.1:PORT/docs` while running.
 
+## Deploy to Google Cloud
+
+One command rebuilds the whole thing in a bare project, which is what makes it
+usable in an ephemeral lab:
+
+```bash
+python3 -m venv cloud/.venv
+cloud/.venv/bin/pip install -r cloud/requirements.txt
+
+bash deploy_to_gcp.sh YOUR_PROJECT_ID
+bash deploy_to_gcp.sh YOUR_PROJECT_ID --skip-ui --skip-seed   # agents only
+```
+
+It creates the KMS signing key, deploys the Auth Broker and the three agents,
+reads each agent's attested identity back out of the GEAP Agent Registry to
+generate the broker's authorization config, redeploys the broker with it, and
+puts the purchasing UI on Cloud Run. Nothing is pinned to a project: engine ids,
+the organization id, the project number and the service URLs are all discovered.
+
+Then check that the governance still holds:
+
+```bash
+cloud/.venv/bin/python cloud/verify_cloud.py          # denials only, writes nothing
+cloud/.venv/bin/python cloud/verify_cloud.py --write  # also proves a retry is idempotent
+```
+
+The project must sit under an **organization**, or Agent Runtime issues a
+service account instead of an Agent Identity and the per-agent authorization
+this demo is built on cannot work.
+
+The UI is deployed `--no-allow-unauthenticated`, and Cloud Run does no
+interactive browser sign-in, so reach it with
+`gcloud run services proxy a2a-inventory-ui --region us-central1`. It is pinned
+to a single instance because its state is SQLite on the instance filesystem;
+that state does not survive a new revision. See [SECURITY_NOTES.md](SECURITY_NOTES.md).
+
 ## Read next
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): trust planes, sequence, and tokens

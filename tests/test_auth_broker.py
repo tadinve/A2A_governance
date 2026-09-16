@@ -20,10 +20,22 @@ from governance_demo.settings import ISSUER
 
 client = TestClient(auth_broker_app.app)
 
-# Deployed principals, as config/broker_clients.json lists them.
-INVENTORY_PRINCIPAL = "3222129270558031872"
-PROCUREMENT_PRINCIPAL = "1882730593880375296"
-PROCUREMENT_ADK_PRINCIPAL = "2745873609963601920"
+# Deployed principals, read from config/broker_clients.json rather than
+# hardcoded: that file is meant to be regenerated per project by
+# registry_principals.py, and a literal engine id here would make the local
+# suite fail the moment anyone did the thing that tooling exists for.
+def _bare_principal(client_id: str) -> str:
+    from governance_demo.settings import load_json
+
+    client = load_json("broker_clients.json")[client_id]
+    principal = next(p for p in client["allowed_principals"]
+                     if not p.startswith(("principal://", "spiffe://", "agents.")))
+    return principal
+
+
+INVENTORY_PRINCIPAL = _bare_principal("inventory-agent-principal")
+PROCUREMENT_PRINCIPAL = _bare_principal("procurement-agent-principal")
+PROCUREMENT_ADK_PRINCIPAL = _bare_principal("procurement-agent-adk-principal")
 
 
 def auth(client_id="identity-broker", secret="identity-broker-demo-secret") -> dict:

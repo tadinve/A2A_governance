@@ -88,6 +88,41 @@ URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region 
 # string the broker checks AUTH_BROKER_AUDIENCE against.
 REVISION="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.latestReadyRevisionName)')"
 
+step "Granting each deployed agent roles/run.invoker on this service"
+# --no-allow-unauthenticated means Cloud Run's own front door checks this
+# before a request ever reaches the FastAPI app -- a missing grant here 403s
+# with a bare Cloud Run HTML page, not our JSON, and looks identical to "the
+# broker rejected this token" when it is really "Cloud Run never let it in".
+# Reads the principals config/broker_clients.json currently has, so this only
+# grants real agents once registry_principals.py has written their identities
+# in (the second broker deploy in deploy_to_gcp.sh's two-pass bootstrap); on
+# the first pass, before any agent exists, there is nothing here to grant yet.
+GRANTED=0
+while read -r member; do
+  [[ -n "$member" ]] || continue
+  gcloud run services add-iam-policy-binding "$SERVICE" \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --member "$member" --role roles/run.invoker --quiet >/dev/null
+  GRANTED=$((GRANTED + 1))
+done < <(python3 -c '
+import json, sys
+try:
+    clients = json.load(open(sys.argv[1]))
+except FileNotFoundError:
+    sys.exit(0)
+for client in clients.values():
+    for principal in client.get("allowed_principals", []):
+        if principal.startswith("principal://"):
+            print(principal)
+            break
+' "$REPO_ROOT/config/broker_clients.json" 2>/dev/null)
+if [[ "$GRANTED" -eq 0 ]]; then
+  info "no agent principals in config/broker_clients.json yet -- nothing to grant"
+  info "(expected on the first of the two broker deploys; run again after the agents exist)"
+else
+  info "granted roles/run.invoker to $GRANTED agent principal(s)"
+fi
+
 step "Deployed"
 info "service  : $SERVICE"
 info "revision : $REVISION"
