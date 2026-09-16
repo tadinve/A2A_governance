@@ -78,7 +78,8 @@ export GOOGLE_CLOUD_LOCATION="$REGION"
 # definitive configuration, not just whatever happened to be in this shell.
 export ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
 export DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
-export ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\":100,\"min_order_quantity\":1}}}"
+DEFAULT_ZOHO_REORDER_POLICY='{"DEMO-WIDGET-A":{"target_stock":100,"min_order_quantity":1}}'
+export ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-$DEFAULT_ZOHO_REORDER_POLICY}"
 
 step() { echo; echo "############ $* ############"; }
 info() { echo "    $*"; }
@@ -90,19 +91,42 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 # Regenerated wholesale each time from this script's own variables, so it
 # always reflects exactly what deploy_to_gcp.sh currently knows -- re-running
 # it overwrites this file; anything hand-added to .env will not survive that.
+# Single-quotes a value for safe placement on the right of KEY=... in a file
+# meant to be `source`d directly. Without this, a JSON-shaped value like
+# ZOHO_REORDER_POLICY sits unquoted in .env, and `source` -- unlike a .env
+# *parser* such as python-dotenv -- runs full shell parsing over that unquoted
+# text: quote-removal strips the embedded double quotes, and each further
+# source/re-export/rewrite cycle compounds whatever damage the last one did.
+# Single-quoting makes the whole line one literal token, so bash cannot get
+# into that spiral no matter what characters the value contains.
+shell_quote() { printf "'"'"'%s'"'"'" "$(printf '%s' "$1" | sed "s/'"'"'/'"'"'\\'"'"''"'"'/g")"; }
+
 write_env_snapshot() {
   {
     echo "# Written by deploy_to_gcp.sh. Source it: source activate.sh"
     echo "# Regenerated on every run; hand edits here will not survive the next one."
-    echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
-    echo "GOOGLE_CLOUD_LOCATION=$REGION"
-    [[ -n "${KMS_SIGNING_KEY:-}" ]] && echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
-    [[ -n "${AUTH_BROKER_URL:-}" ]] && echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
-    [[ -n "${ZOHO_ORGANIZATION_ID:-}" ]] && echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
-    echo "DEMO_SKU=$DEMO_SKU"
-    echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
+    echo "GOOGLE_CLOUD_PROJECT=$(shell_quote "$PROJECT_ID")"
+    echo "GOOGLE_CLOUD_LOCATION=$(shell_quote "$REGION")"
+    [[ -n "${KMS_SIGNING_KEY:-}" ]] && echo "KMS_SIGNING_KEY=$(shell_quote "$KMS_SIGNING_KEY")"
+    [[ -n "${AUTH_BROKER_URL:-}" ]] && echo "AUTH_BROKER_URL=$(shell_quote "$AUTH_BROKER_URL")"
+    [[ -n "${ZOHO_ORGANIZATION_ID:-}" ]] && echo "ZOHO_ORGANIZATION_ID=$(shell_quote "$ZOHO_ORGANIZATION_ID")"
+    echo "DEMO_SKU=$(shell_quote "$DEMO_SKU")"
+    echo "ZOHO_REORDER_POLICY=$(shell_quote "$ZOHO_REORDER_POLICY")"
   } > "$REPO_ROOT/.env"
 }
+
+# An inherited ZOHO_REORDER_POLICY -- from a previous `source activate.sh` in
+# this same shell -- is trusted only if it is still valid JSON. This is what
+# actually stops the corruption rather than just avoiding new instances of it:
+# without it, a value already mangled by one unquoted round-trip would be
+# read back as non-empty, kept by ${VAR:-default}, and written out again
+# unfixed by every run after.
+if [[ -n "${ZOHO_REORDER_POLICY:-}" ]] \
+   && ! python3 -c 'import json, sys; json.loads(sys.argv[1])' "$ZOHO_REORDER_POLICY" 2>/dev/null; then
+  echo "WARNING: the inherited ZOHO_REORDER_POLICY is not valid JSON (likely" >&2
+  echo "  corrupted by an earlier unquoted .env round-trip); using the default instead." >&2
+  export ZOHO_REORDER_POLICY="$DEFAULT_ZOHO_REORDER_POLICY"
+fi
 write_env_snapshot
 
 [[ -x "$PY" ]] || die "missing $PY.
@@ -181,8 +205,8 @@ if [[ "$ASSUME_YES" != true ]]; then
   echo "    services and Agent Runtime deployments in '$PROJECT_ID'."
   [[ "$SKIP_SEED" == true ]] || echo "    It will also write demo data to the configured Zoho organization."
   echo
-  read -r -p "    Continue? [y/N] " reply
-  [[ "$reply" =~ ^[Yy] ]] || { echo "    aborted"; exit 1; }
+  read -r -p "    Continue? [Y/n] " reply
+  [[ -z "$reply" || "$reply" =~ ^[Yy] ]] || { echo "    aborted"; exit 1; }
 fi
 # Agent Identity is only issued to projects under an organization. Without one
 # the deployment still succeeds and silently falls back to a service account,
@@ -318,6 +342,18 @@ else
 fi
 
 if [[ "$SKIP_SEED" == false ]]; then
+  step "9c. Granting the now-deployed agents access to their Zoho secrets"
+  # Step 3 necessarily ran before any agent existed, so it created these
+  # secrets "without grants" (its own log says so). Nothing re-ran it after --
+  # exactly the KMS/broker chicken-and-egg this bootstrap otherwise handles in
+  # two passes, missed here. The result: find_item() at the top of every
+  # agent's first real tool call fails with ZohoUnavailable, which reads as a
+  # connectivity problem and has nothing to do with the actual cause (Secret
+  # Manager correctly refusing an ungranted principal).
+  set -a; source "$REPO_ROOT/.env_zoho_urls" 2>/dev/null; set +a
+  "$PY" "$CLOUD_ROOT/setup_zoho_secrets.py" \
+    || die "could not grant Zoho secret access to the deployed agents"
+
   step "10. Seeding Zoho demo data"
   "$PY" "$CLOUD_ROOT/seed_demo_data.py" || info "seeding skipped or already present"
 fi
