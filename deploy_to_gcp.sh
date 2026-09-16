@@ -73,10 +73,37 @@ REGION="${REGION:-${GOOGLE_CLOUD_LOCATION:-us-central1}}"
 # inheriting whatever happened to be exported.
 export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
 export GOOGLE_CLOUD_LOCATION="$REGION"
+# Resolved once, here, rather than left for each sub-script to default
+# independently -- so the snapshot written to .env below is the actual
+# definitive configuration, not just whatever happened to be in this shell.
+export ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
+export DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
+export ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\":100,\"min_order_quantity\":1}}}"
 
 step() { echo; echo "############ $* ############"; }
 info() { echo "    $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
+
+# Written at each milestone below, not only at the end: a run that fails
+# partway (the whole point of testing this against a bare project) still
+# leaves a .env with whatever it managed to resolve, instead of nothing.
+# Regenerated wholesale each time from this script's own variables, so it
+# always reflects exactly what deploy_to_gcp.sh currently knows -- re-running
+# it overwrites this file; anything hand-added to .env will not survive that.
+write_env_snapshot() {
+  {
+    echo "# Written by deploy_to_gcp.sh. Source it: source activate.sh"
+    echo "# Regenerated on every run; hand edits here will not survive the next one."
+    echo "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+    echo "GOOGLE_CLOUD_LOCATION=$REGION"
+    [[ -n "${KMS_SIGNING_KEY:-}" ]] && echo "KMS_SIGNING_KEY=$KMS_SIGNING_KEY"
+    [[ -n "${AUTH_BROKER_URL:-}" ]] && echo "AUTH_BROKER_URL=$AUTH_BROKER_URL"
+    [[ -n "${ZOHO_ORGANIZATION_ID:-}" ]] && echo "ZOHO_ORGANIZATION_ID=$ZOHO_ORGANIZATION_ID"
+    echo "DEMO_SKU=$DEMO_SKU"
+    echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
+  } > "$REPO_ROOT/.env"
+}
+write_env_snapshot
 
 [[ -x "$PY" ]] || die "missing $PY.
   The deploy tooling runs from its own virtualenv, separate from the local demo's:
@@ -200,6 +227,7 @@ step "2. KMS signing key"
 KMS_SIGNING_KEY="projects/${PROJECT_ID}/locations/${REGION}/keyRings/a2a-demo-delegation/cryptoKeys/delegation-issuer/cryptoKeyVersions/1"
 export KMS_SIGNING_KEY
 info "$KMS_SIGNING_KEY"
+write_env_snapshot
 
 step "3. Zoho connector secrets"
 if [[ "$SKIP_SEED" == true ]]; then
@@ -227,6 +255,7 @@ AUTH_BROKER_URL="$(bash "$CLOUD_ROOT/deploy_auth_broker.sh" | awk -F= '/^AUTH_BR
 [[ -n "$AUTH_BROKER_URL" ]] || die "broker deploy did not report a URL"
 export AUTH_BROKER_URL
 info "$AUTH_BROKER_URL"
+write_env_snapshot
 
 step "5. Procurement Agent (A2A)"
 ( cd "$CLOUD_ROOT" && "$PY" deploy_a2a.py )
@@ -298,19 +327,20 @@ if [[ "$SKIP_UI" == false ]]; then
   bash "$CLOUD_ROOT/deploy_inventory_ui.sh"
 fi
 
+write_env_snapshot
 step "Done"
 cat <<NEXT
-    Export these for the verification scripts and for redeploys:
+    Everything this run resolved is in .env at the repo root. A new terminal,
+    or a future session against this same project, picks it back up with:
 
-      export GOOGLE_CLOUD_PROJECT="$PROJECT_ID"
-      export GOOGLE_CLOUD_LOCATION="$REGION"
-      export AUTH_BROKER_URL="$AUTH_BROKER_URL"
-      export KMS_SIGNING_KEY="$KMS_SIGNING_KEY"
+      source activate.sh
 
-    Then check the governance actually holds:
+    which sources .env and activates cloud/.venv, so the tools below need no
+    path prefix and no re-exporting. Then check the governance actually holds:
 
-      cloud/.venv/bin/python cloud/verify_cloud.py
+      python3 cloud/verify_cloud.py
 
-    The agents must still be granted roles/aiplatform.user on each other where
-    they call across; see cloud/iam_binding.py and DEPLOYED_AGENTS.md.
+    Step 9b already granted Inventory Agent roles/aiplatform.user on the A2A
+    Procurement Agent -- see cloud/iam_binding.py if a different pair of
+    agents ever needs the same grant, and DEPLOYED_AGENTS.md for what it means.
 NEXT

@@ -66,11 +66,20 @@ generate the broker's authorization config, redeploys the broker with it, and
 puts the purchasing UI on Cloud Run. Nothing is pinned to a project: engine ids,
 the organization id, the project number and the service URLs are all discovered.
 
+Everything it resolves along the way -- project, region, the broker URL, the
+KMS key name -- is written to `.env` at the repo root as it goes, so a run that
+fails partway still leaves something useful, and a later session picks the same
+project back up with:
+
+```bash
+source activate.sh   # loads .env and activates cloud/.venv -- must be sourced
+```
+
 Then check that the governance still holds:
 
 ```bash
-cloud/.venv/bin/python cloud/verify_cloud.py          # denials only, writes nothing
-cloud/.venv/bin/python cloud/verify_cloud.py --write  # also proves a retry is idempotent
+python3 cloud/verify_cloud.py          # denials only, writes nothing
+python3 cloud/verify_cloud.py --write  # also proves a retry is idempotent
 ```
 
 The project must sit under an **organization**, or Agent Runtime issues a
