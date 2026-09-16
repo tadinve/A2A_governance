@@ -13,5 +13,13 @@ google-cloud-kms>=3.0
 opentelemetry-api==1.36.0
 opentelemetry-sdk==1.36.0
 opentelemetry-instrumentation-fastapi==0.57b0
-opentelemetry-instrumentation-httpx==0.57b0
+# This app calls out over `requests` (google.auth's transport, zoho_mcp.py's
+# own client), never httpx -- the httpx instrumentor a previous pass added
+# here would have started and finished cleanly while capturing nothing.
+opentelemetry-instrumentation-requests==0.57b0
+# process_run() runs in a plain threading.Thread dispatched from the request
+# handler (app.py's _dispatch/_run_task), so the actual reorder work -- the
+# span that matters -- happens outside the request's context by default.
+# This is what makes it the same trace instead of two disconnected ones.
+opentelemetry-instrumentation-threading==0.57b0
 opentelemetry-exporter-gcp-trace==1.9.0

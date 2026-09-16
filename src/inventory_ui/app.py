@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import auth, executor, security_plane, store
+from .telemetry import instrument_ui
 from .models import (
     DEFAULT_APPROVAL_TTL_SECONDS,
     PO_APPROVED,
@@ -36,6 +37,7 @@ from .models import (
 
 
 app = FastAPI(title="Inventory & Purchasing", version="1.0")
+instrument_ui(app)
 STATIC = Path(__file__).resolve().parent / "static"
 APPROVAL_TTL = int(os.getenv("APPROVAL_TTL_SECONDS", str(DEFAULT_APPROVAL_TTL_SECONDS)))
 INTERNAL_TOKEN = os.getenv("INTERNAL_TASK_TOKEN", "local-task-token")

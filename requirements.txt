@@ -8,6 +8,12 @@ opentelemetry-api==1.36.0
 opentelemetry-sdk==1.36.0
 opentelemetry-instrumentation-fastapi==0.57b0
 opentelemetry-instrumentation-httpx==0.57b0
+# For inventory_ui specifically, which calls out over requests (not httpx) and
+# dispatches its real work onto a plain threading.Thread -- see
+# src/inventory_ui/telemetry.py for why both are needed for one correlated
+# trace per action rather than two disconnected ones.
+opentelemetry-instrumentation-requests==0.57b0
+opentelemetry-instrumentation-threading==0.57b0
 opentelemetry-exporter-gcp-trace==1.9.0
 pytest==8.4.1
 
