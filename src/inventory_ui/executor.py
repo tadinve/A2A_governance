@@ -64,12 +64,8 @@ class Unresolved(Exception):
     """Policy or inventory data is insufficient to propose an order."""
 
 
-def read_inventory(sku: str) -> dict[str, Any]:
-    """Fetch stock and evaluate the reorder rule.
-
-    A tool failure propagates. It must never be flattened into "zero stock",
-    which would read as "no reorder needed" and silently skip replenishment.
-    """
+def _read_inventory_direct(sku: str) -> dict[str, Any]:
+    """This process runs the reorder rule itself, against live Zoho."""
     governance = _governance()
     item = governance.find_item(sku)
     if not item:
@@ -94,8 +90,144 @@ def read_inventory(sku: str) -> dict[str, Any]:
         "reorder_needed": plan.get("reorder_needed"),
         "suggested_quantity": plan.get("suggested_quantity"),
         "rule": plan.get("rule"),
+        "execution_mode": "direct",
     }
     return observed
+
+
+def observed_from_agent_check_stock(
+    sku: str, result: dict[str, Any], *, organization_id: str | None = None,
+) -> dict[str, Any]:
+    """Map the deployed Inventory Agent's check_stock tool result to the shape
+    the rest of this module expects, regardless of which mode produced it.
+
+    A pure function of its arguments -- no network call, no live governance
+    lookup inside it -- so the three shapes check_stock can return (success,
+    unresolved, error) are each tested directly against a canned response,
+    without a live Agent Runtime deployment or live Zoho. The network call and
+    the organization id lookup both live in `read_inventory`, the one caller
+    that actually needs them to be real.
+    """
+    status = result.get("status")
+    if status == "error":
+        raise RuntimeError(result.get("error_message") or "Inventory Agent reported an error")
+    if status == "unresolved":
+        item = result.get("item") or {}
+        return {
+            "sku": item.get("sku", sku), "item_id": item.get("item_id"),
+            "name": item.get("name"), "purchase_rate": None,
+            "organization_id": organization_id,
+            "stock_on_hand": None, "committed_stock": None,
+            "available_stock": None, "incoming_quantity": None,
+            "reorder_level": None, "target_stock": None,
+            "resolved": False, "reason": result.get("reason"),
+            "reorder_needed": None, "suggested_quantity": None, "rule": None,
+            "execution_mode": "agent",
+        }
+    if status != "success":
+        raise RuntimeError(
+            f"Inventory Agent returned an unrecognised status: {status!r}")
+
+    item = result.get("item") or {}
+    stock = result.get("stock") or {}
+    return {
+        "sku": item.get("sku", sku), "item_id": item.get("item_id"),
+        "name": item.get("name"), "purchase_rate": item.get("purchase_rate"),
+        # check_stock's tool result carries no organization id -- the caller's
+        # own direct lookup stands in for it. Everything that decides anything
+        # (stock, the reorder rule, the delegation) came from the agent; this
+        # is bookkeeping the tool result simply does not expose.
+        "organization_id": organization_id,
+        # check_stock reports netted `available`, not raw `stock_on_hand`;
+        # left absent here rather than guessed from a field it never returns.
+        "stock_on_hand": None,
+        "committed_stock": stock.get("committed"),
+        "available_stock": stock.get("available"),
+        "incoming_quantity": stock.get("incoming_on_open_orders"),
+        "reorder_level": stock.get("reorder_level"),
+        "target_stock": stock.get("target_stock"),
+        "resolved": True,
+        "reason": None,
+        "reorder_needed": result.get("reorder_needed"),
+        "suggested_quantity": result.get("suggested_quantity"),
+        "rule": result.get("rule"),
+        "execution_mode": "agent",
+        "delegation_evidence": result.get("delegation_evidence"),
+    }
+
+
+def _check_stock_via_agent(sku: str) -> dict[str, Any]:
+    """Drive the deployed Inventory Agent over its real invocation path.
+
+    This is what makes an "agent"-mode run actually exercise the identity and
+    delegation chain -- Human -> UI -> Inventory Agent -> Zoho -- rather than
+    the UI's own process reading Zoho directly under its own service account.
+
+    Agent Runtime's streamQuery does not expose a way to invoke a named tool
+    directly; every call goes through the model's own function-calling, so
+    this sends the same deterministic prompt the rest of this demo already
+    relies on ("Check stock on SKU.") and looks for check_stock's function
+    response specifically in the reply, rather than trusting whatever text
+    came back. If the model does not call it, that is surfaced as a failure,
+    not silently treated as "no stock data".
+    """
+    resource = os.getenv("INVENTORY_AGENT_RESOURCE", "").strip()
+    if not resource:
+        raise RuntimeError(
+            "INVENTORY_AGENT_RESOURCE is not set; agent mode has no deployed "
+            "Inventory Agent to call. Set it to the reasoningEngine resource "
+            "name (deploy_inventory_ui.sh resolves and sets this automatically).")
+    region = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+    import google.auth
+    import google.auth.transport.requests
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    session = google.auth.transport.requests.AuthorizedSession(credentials)
+    url = f"https://{region}-aiplatform.googleapis.com/v1/{resource}:streamQuery?alt=sse"
+    body = {"class_method": "stream_query",
+            "input": {"user_id": "inventory-ui", "message": f"Check stock on {sku}."}}
+    response = session.post(url, json=body, timeout=180, stream=True)
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Inventory Agent call failed: HTTP {response.status_code} "
+            f"{response.text[:300]}")
+
+    for line in response.iter_lines(decode_unicode=True):
+        line = (line or "").strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for part in event.get("content", {}).get("parts", []):
+            call = part.get("function_response")
+            if call and call.get("name") == "check_stock":
+                return call.get("response", {})
+
+    raise RuntimeError(
+        "Inventory Agent's reply never called check_stock; cannot report stock.")
+
+
+def read_inventory(sku: str) -> dict[str, Any]:
+    """Fetch stock and evaluate the reorder rule.
+
+    A tool failure propagates. It must never be flattened into "zero stock",
+    which would read as "no reorder needed" and silently skip replenishment.
+
+    Which mode ran is recorded on the result (`execution_mode`) and carried
+    through to the run's stored state, so the UI never presents an
+    agent-governed read as though it were the direct path or vice versa.
+    """
+    if EXECUTION_MODE == "agent":
+        result = _check_stock_via_agent(sku)
+        return observed_from_agent_check_stock(
+            sku, result, organization_id=_governance().organization_id())
+    return _read_inventory_direct(sku)
 
 
 def build_draft(observed: dict[str, Any]) -> dict[str, Any]:
@@ -210,6 +342,7 @@ def process_run(run_id: str) -> None:
     if not run or run["state"] != RUN_DRAFTING:
         return
 
+    store.log(run_id, "execution_mode", EXECUTION_MODE)
     try:
         observed = read_inventory(run["scope_sku"])
     except Exception as exc:
@@ -219,6 +352,7 @@ def process_run(run_id: str) -> None:
 
     store.set_run_state(run_id, RUN_DRAFTING, stock=observed)
     store.log(run_id, "stock_checked",
+              f"[{observed.get('execution_mode')}] "
               f"available={observed.get('available_stock')} "
               f"reorder_level={observed.get('reorder_level')}")
 

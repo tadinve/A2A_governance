@@ -87,3 +87,62 @@ def test_active_run_is_one_per_subject_and_scope():
     assert active is not None
     assert store.active_run_for("solo@example.com", "OTHER-SKU") is None
     assert store.active_run_for("nobody@example.com", "SKU-X") is None
+
+
+# Agent execution mode ---------------------------------------------------
+
+def test_agent_check_stock_success_maps_to_the_same_observed_shape():
+    from inventory_ui.executor import observed_from_agent_check_stock
+
+    result = {
+        "status": "success",
+        "item": {"item_id": "i1", "sku": "DEMO-WIDGET-A", "name": "Demo Widget A",
+                 "purchase_rate": 10.0},
+        "stock": {"available": 30.0, "committed": 0.0, "incoming_on_open_orders": 0.0,
+                 "reorder_level": 50.0, "target_stock": 100.0},
+        "reorder_needed": True, "suggested_quantity": 70, "rule": "reorder rule text",
+        "delegation_evidence": {"sub": "demo-user", "act": {"sub": "inventory-agent"}},
+    }
+    observed = observed_from_agent_check_stock("DEMO-WIDGET-A", result, organization_id="org1")
+    assert observed["execution_mode"] == "agent"
+    assert observed["resolved"] is True
+    assert observed["available_stock"] == 30.0
+    assert observed["reorder_level"] == 50.0
+    assert observed["reorder_needed"] is True
+    assert observed["suggested_quantity"] == 70
+    assert observed["delegation_evidence"]["act"] == {"sub": "inventory-agent"}
+
+
+def test_agent_check_stock_unresolved_does_not_guess_a_quantity():
+    from inventory_ui.executor import observed_from_agent_check_stock
+
+    result = {"status": "unresolved",
+             "item": {"item_id": "i1", "sku": "S", "name": "N"},
+             "reason": "no target stock configured"}
+    observed = observed_from_agent_check_stock("S", result, organization_id="org1")
+    assert observed["resolved"] is False
+    assert observed["reason"] == "no target stock configured"
+    assert observed["suggested_quantity"] is None
+
+
+def test_agent_check_stock_error_raises_rather_than_reporting_zero_stock():
+    from inventory_ui.executor import observed_from_agent_check_stock
+
+    result = {"status": "error", "error_message": "Could not reach Zoho Inventory: Timeout"}
+    with pytest.raises(RuntimeError, match="Could not reach Zoho Inventory"):
+        observed_from_agent_check_stock("S", result)
+
+
+def test_agent_check_stock_unrecognised_status_is_not_swallowed():
+    from inventory_ui.executor import observed_from_agent_check_stock
+
+    with pytest.raises(RuntimeError):
+        observed_from_agent_check_stock("S", {"status": "??"})
+
+
+def test_direct_mode_is_unaffected_and_still_labels_itself():
+    """The pre-existing path must keep working and now says which one it is."""
+    from inventory_ui import executor
+
+    assert hasattr(executor, "_read_inventory_direct")
+    assert executor.EXECUTION_MODE in ("direct", "agent")
