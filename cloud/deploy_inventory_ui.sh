@@ -26,6 +26,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 step() { echo; echo "=== $* ==="; }
 info() { echo "    $*"; }
 
+# A service account is not referenceable in an IAM policy the instant it is
+# created. For a few seconds afterwards Secret Manager answers "Service
+# account ... does not exist" with HTTP 400 -- propagation, not a real error,
+# but indistinguishable from one by exit status, so under `set -e` it aborted
+# the deployment at the first grant on every freshly built project. The two
+# project-level bindings below tolerated this already by discarding failures
+# with `|| true`; the secret bindings must not, because the UI genuinely
+# cannot read its Zoho endpoint or its session secret without them.
+retry_iam() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+  # Final attempt with output shown, so a real failure reports its own reason
+  # rather than being hidden behind the retries.
+  "$@" >/dev/null
+}
+
 step "Service account"
 if gcloud iam service-accounts describe "$SA_EMAIL" --project "$PROJECT_ID" >/dev/null 2>&1; then
   info "exists: $SA_EMAIL"
@@ -40,9 +61,9 @@ step "Granting only what the UI actually needs"
 # The Zoho MCP endpoint URLs. The UI never sees a Zoho credential itself.
 for secret in zoho-invread-mcp-url zoho-procurewrite-mcp-url; do
   if gcloud secrets describe "$secret" --project "$PROJECT_ID" >/dev/null 2>&1; then
-    gcloud secrets add-iam-policy-binding "$secret" --project "$PROJECT_ID" \
+    retry_iam gcloud secrets add-iam-policy-binding "$secret" --project "$PROJECT_ID" \
       --member "serviceAccount:${SA_EMAIL}" \
-      --role roles/secretmanager.secretAccessor >/dev/null
+      --role roles/secretmanager.secretAccessor
     info "secretAccessor on $secret"
   else
     info "WARNING: secret $secret not found; run cloud/setup_zoho_secrets.py"
@@ -69,9 +90,9 @@ if ! gcloud secrets describe a2a-ui-session-secret --project "$PROJECT_ID" >/dev
 else
   info "a2a-ui-session-secret exists"
 fi
-gcloud secrets add-iam-policy-binding a2a-ui-session-secret --project "$PROJECT_ID" \
+retry_iam gcloud secrets add-iam-policy-binding a2a-ui-session-secret --project "$PROJECT_ID" \
   --member "serviceAccount:${SA_EMAIL}" \
-  --role roles/secretmanager.secretAccessor >/dev/null
+  --role roles/secretmanager.secretAccessor
 
 step "Finding the deployed Inventory Agent to connect the UI to"
 # The whole point of "agent" execution mode: the UI's Check Inventory action
@@ -111,14 +132,38 @@ if ! gcloud artifacts repositories describe a2a-demo \
     --location "$REGION" --project "$PROJECT_ID" \
     --description "A2A governance demo images" >/dev/null
 fi
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/a2a-demo/${SERVICE}:$(date +%Y%m%d-%H%M%S)"
+# Content-addressed, not timestamped. A timestamp tag meant every run produced
+# a new image and therefore a new Cloud Run revision even when nothing had
+# changed -- and a new revision starts an empty database, so merely re-running
+# this script destroyed every approval record and submission idempotency claim
+# it had. The tag is now a digest of exactly what the Dockerfile copies in, so
+# an unchanged checkout yields the same tag, the build is skipped, and the
+# running instance is left alone.
+#
+# Paths are hashed relative to the repo root so the digest does not depend on
+# where the checkout happens to live -- the same commit gives the same tag from
+# a laptop or from Cloud Shell.
+if command -v shasum >/dev/null 2>&1; then SHA_CMD=(shasum -a 256); else SHA_CMD=(sha256sum); fi
+source_digest() {
+  (
+    cd "$REPO_ROOT" && find src config cloud/inventory_agent cloud/inventory_ui \
+      -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -path '*/.venv/*' \
+      -print0 2>/dev/null | sort -z | xargs -0 "${SHA_CMD[@]}"
+  ) | "${SHA_CMD[@]}" | cut -c1-12
+}
+IMAGE_TAG="$(source_digest)"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/a2a-demo/${SERVICE}:${IMAGE_TAG}"
 
 step "Building the image"
-gcloud builds submit "$REPO_ROOT" \
-  --project "$PROJECT_ID" --region "$REGION" \
-  --config "$REPO_ROOT/cloud/inventory_ui/cloudbuild.yaml" \
-  --substitutions "_IMAGE=${IMAGE}" --quiet
-info "built $IMAGE"
+if gcloud artifacts docker images describe "$IMAGE" --project "$PROJECT_ID" >/dev/null 2>&1; then
+  info "already built from this source: $IMAGE_TAG"
+else
+  gcloud builds submit "$REPO_ROOT" \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --config "$REPO_ROOT/cloud/inventory_ui/cloudbuild.yaml" \
+    --substitutions "_IMAGE=${IMAGE}" --quiet
+  info "built $IMAGE"
+fi
 
 ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
 DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
@@ -129,17 +174,35 @@ ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\"
 EXECUTION_MODE="direct"
 [[ -n "$INVENTORY_AGENT_RESOURCE" ]] && EXECUTION_MODE="agent"
 
-step "Deploying (single instance, authenticated access only)"
-gcloud run deploy "$SERVICE" \
+ENV_VARS="^@^GOOGLE_CLOUD_PROJECT=${PROJECT_ID}@GOOGLE_CLOUD_LOCATION=${REGION}@TRACE_EXPORTER=gcp@ZOHO_ORGANIZATION_ID=${ZOHO_ORGANIZATION_ID}@DEMO_SKU=${DEMO_SKU}@ZOHO_REORDER_POLICY=${ZOHO_REORDER_POLICY}@EXECUTION_MODE=${EXECUTION_MODE}@INVENTORY_AGENT_RESOURCE=${INVENTORY_AGENT_RESOURCE}"
+
+# One label records the entire desired state -- the image and every environment
+# variable -- so "does this actually need redeploying?" is a single comparison
+# instead of a field-by-field diff against the running revision. Anything that
+# would change the container changes this digest; anything that would not,
+# does not, and the instance (and its approval database) survives untouched.
+DESIRED_CONFIG="$(printf '%s' "${IMAGE}|${ENV_VARS}" | "${SHA_CMD[@]}" | cut -c1-12)"
+CURRENT_CONFIG="$(gcloud run services describe "$SERVICE" \
   --project "$PROJECT_ID" --region "$REGION" \
-  --image "$IMAGE" \
-  --service-account "$SA_EMAIL" \
-  --no-allow-unauthenticated \
-  --min-instances 1 --max-instances 1 --timeout 300 \
-  --set-secrets "SESSION_SECRET=a2a-ui-session-secret:latest" \
-  --set-env-vars "^@^GOOGLE_CLOUD_PROJECT=${PROJECT_ID}@GOOGLE_CLOUD_LOCATION=${REGION}@TRACE_EXPORTER=gcp@ZOHO_ORGANIZATION_ID=${ZOHO_ORGANIZATION_ID}@DEMO_SKU=${DEMO_SKU}@ZOHO_REORDER_POLICY=${ZOHO_REORDER_POLICY}@EXECUTION_MODE=${EXECUTION_MODE}@INVENTORY_AGENT_RESOURCE=${INVENTORY_AGENT_RESOURCE}" \
-  --quiet
-info "execution mode: $EXECUTION_MODE"
+  --format='value(metadata.labels.a2aconfig)' 2>/dev/null || true)"
+
+step "Deploying (single instance, authenticated access only)"
+if [[ -n "$CURRENT_CONFIG" && "$CURRENT_CONFIG" == "$DESIRED_CONFIG" ]]; then
+  info "already serving this exact image and configuration ($DESIRED_CONFIG)"
+  info "no new revision: the approval database on the running instance survives"
+else
+  gcloud run deploy "$SERVICE" \
+    --project "$PROJECT_ID" --region "$REGION" \
+    --image "$IMAGE" \
+    --service-account "$SA_EMAIL" \
+    --no-allow-unauthenticated \
+    --min-instances 1 --max-instances 1 --timeout 300 \
+    --labels "a2aconfig=${DESIRED_CONFIG}" \
+    --set-secrets "SESSION_SECRET=a2a-ui-session-secret:latest" \
+    --set-env-vars "$ENV_VARS" \
+    --quiet
+  info "execution mode: $EXECUTION_MODE"
+fi
 
 step "Letting the operator running this script open the UI"
 # --no-allow-unauthenticated (correctly) means Cloud Run checks IAM before the

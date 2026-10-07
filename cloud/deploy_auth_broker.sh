@@ -39,10 +39,26 @@ else
 fi
 
 step "Granting signing rights on the key only (not project-wide)"
-gcloud kms keys add-iam-policy-binding "$KEY_ID" \
+# A service account is not referenceable in an IAM policy the instant it is
+# created; for a few seconds afterwards the binding can be rejected with
+# "does not exist". KMS happens to tolerate this more often than Secret
+# Manager does, which is the only reason this line has not failed the way the
+# equivalent one in deploy_inventory_ui.sh did on a freshly built project.
+# That is luck, not design, so it retries too.
+retry_iam() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+  "$@" >/dev/null
+}
+retry_iam gcloud kms keys add-iam-policy-binding "$KEY_ID" \
   --keyring "$KEY_RING" --location "$REGION" --project "$PROJECT_ID" \
   --member "serviceAccount:${SA_EMAIL}" \
-  --role roles/cloudkms.signerVerifier >/dev/null
+  --role roles/cloudkms.signerVerifier
 info "roles/cloudkms.signerVerifier on $KEY_ID -> $SA_EMAIL"
 
 # Traces only. The broker needs nothing else at project level.

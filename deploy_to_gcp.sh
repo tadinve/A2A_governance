@@ -99,7 +99,18 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 # source/re-export/rewrite cycle compounds whatever damage the last one did.
 # Single-quoting makes the whole line one literal token, so bash cannot get
 # into that spiral no matter what characters the value contains.
-shell_quote() { printf "'"'"'%s'"'"'" "$(printf '%s' "$1" | sed "s/'"'"'/'"'"'\\'"'"''"'"'/g")"; }
+# The format string here used to be '"%s"' -- single AND double quotes -- so
+# every value was written as '"value"' and came back out of `source` with the
+# double quotes still attached. gcloud then rejected the project id with
+# INVALID_ARGUMENT, and a value containing an apostrophe produced an outright
+# syntax error that broke `source activate.sh` for every variable after it.
+# Single-quoting is the whole job: wrap in single quotes, and turn each
+# embedded single quote into the standard '\'' escape.
+shell_quote() {
+  local s=$1
+  s=${s//\'/\'\\\'\'}
+  printf "'%s'" "$s"
+}
 
 write_env_snapshot() {
   {
