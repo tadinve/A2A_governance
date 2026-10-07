@@ -177,17 +177,24 @@ print(json.dumps({"spec": {"deploymentSpec": {"agentGatewayConfig":
     -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -d "$BODY" \
-    "${HOST}/${RESOURCE}?updateMask=spec.deploymentSpec.agentGatewayConfig" 2>&1)" || true
+    "${HOST}/${RESOURCE}?updateMask=spec.deployment_spec.agent_gateway_config" 2>&1)" || true
 
-  # The PATCH response is not evidence. This API returns a perfectly ordinary
-  # non-error body for an update it then does not apply: observed live, three
-  # agents reported "bound" and read back with no agentGatewayConfig at all.
-  # So the only trustworthy check is to read the resource back and compare.
-  # A script that reports a routing change it did not make is worse than one
-  # that fails, because the next person acts on the claim.
-  sleep 3
-  APPLIED="$(curl -sS -H "Authorization: Bearer ${TOKEN}" "${HOST}/${RESOURCE}" \
-    | python3 -c '
+  # The PATCH response is not evidence, so the resource is read back and
+  # compared. But the read-back must be PATIENT: this binding is eventually
+  # consistent, and measured on a live project it took minutes, not seconds,
+  # to appear.
+  #
+  # An earlier version of this script waited three seconds, saw nothing, and
+  # reported "the API accepted the request and did not apply it" for three
+  # agents that were in fact all binding correctly. That false negative sent a
+  # whole investigation into redeploying agents and migrating deployment paths,
+  # none of which was needed. Polling until a deadline is the fix; the wait is
+  # the feature.
+  POLL_DEADLINE=$(( SECONDS + 300 ))
+  APPLIED=""
+  while :; do
+    APPLIED="$(curl -sS -H "Authorization: Bearer ${TOKEN}" "${HOST}/${RESOURCE}" \
+      | python3 -c '
 import json, sys
 try:
     spec = (json.load(sys.stdin).get("spec") or {})
@@ -195,6 +202,14 @@ except Exception:
     print(""); raise SystemExit(0)
 config = (spec.get("deploymentSpec") or {}).get("agentGatewayConfig") or {}
 print((config.get("agentToAnywhereConfig") or {}).get("agentGateway") or "")')"
+    [[ "${APPLIED#*/locations/}" == "${DESIRED#*/locations/}" ]] && break
+    if (( SECONDS >= POLL_DEADLINE )); then
+      break
+    fi
+    printf '    %s: waiting for the change to propagate...\r' "$NAME"
+    sleep 15
+  done
+  printf '                                                              \r'
 
   if [[ "${APPLIED#*/locations/}" == "${DESIRED#*/locations/}" ]]; then
     info "$NAME: $([[ -z "$DESIRED" ]] && echo 'unbound' || echo "bound -> ${GATEWAY}") (verified)"
@@ -207,10 +222,12 @@ try:
     print(json.loads(raw).get("error", {}).get("message", "")[:300])
 except Exception:
     print(raw[:300])' <<<"$RESPONSE")"
-    echo "    FAIL $NAME: the API accepted the request and did not apply it." >&2
+    echo "    FAIL $NAME: still not applied after 5 minutes of polling." >&2
     echo "         requested : ${DESIRED:-<unbound>}" >&2
     echo "         actual    : ${APPLIED:-<no agentGatewayConfig on the resource>}" >&2
     [[ -n "$ERROR_MESSAGE" ]] && echo "         response  : $ERROR_MESSAGE" >&2
+    echo "         This may still be propagation rather than failure. Re-read" >&2
+    echo "         before concluding: python3 cloud/verify_agent_gateway.py --post-bind" >&2
     FAILED=1
   fi
 done <<<"$RESOLVED"
@@ -218,18 +235,19 @@ done <<<"$RESOLVED"
 step "Next"
 if [[ $FAILED -ne 0 ]]; then
   cat <<'NEXT'
-    At least one agent did not bind, and the read-back above proves it rather
-    than inferring it from a response body.
+    At least one agent did not show the change within the polling window.
 
-    Measured against this project: PATCH of spec.deploymentSpec.agentGatewayConfig
-    returns success and does not persist. Google's own documentation points the
-    same way -- "You must redeploy a new reasoning engine with both
-    agent_gateway_config and identity_type=AGENT_IDENTITY set at agent creation
-    time" -- so binding is effectively a deploy-time property, and the PATCH
-    example in those docs should not be relied on for an existing engine.
+    Before concluding it failed: this binding is eventually consistent and has
+    been measured taking minutes. Re-read the state before acting on this --
+    a previous investigation wasted considerable effort treating propagation
+    delay as an API that silently ignored writes.
 
-    The supported route is to redeploy each agent with the gateway set at
-    creation:
+        python3 cloud/verify_agent_gateway.py --post-bind
+
+    If it genuinely never applies, the documented fallback is to set the
+    gateway at creation instead: Google's docs say "You must redeploy a new
+    reasoning engine with both agent_gateway_config and
+    identity_type=AGENT_IDENTITY set at agent creation time."
 
         config = {
             "agent_gateway_config": {
@@ -237,12 +255,11 @@ if [[ $FAILED -ne 0 ]]; then
             "identity_type": types.IdentityType.AGENT_IDENTITY,
         }
 
-    cloud/deploy_a2a.py already deploys through the Python SDK and is the one
-    place that config can be added with a small change. cloud/deploy_agents.sh
-    drives `adk deploy agent_engine` instead, which has no flag for it -- those
-    two agents would have to move onto the same SDK path first.
-
-    Nothing is bound, so the demo is unaffected and the gateway is inert.
+    cloud/deploy_a2a.py already deploys through the Python SDK and is where
+    that config fits with a small change. Note that re-creating an engine
+    allocates a NEW Agent Identity principal, which invalidates
+    config/broker_clients.json and every resource-level IAM grant that names
+    the old one -- an update preserves them, which is why it is tried first.
 NEXT
   exit 1
 fi

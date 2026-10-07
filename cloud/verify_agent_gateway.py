@@ -114,21 +114,111 @@ def observed(project: str, region: str) -> int:
               "or a Check Inventory in the UI) and run this again.")
         return 0
 
-    seen: dict[tuple[str, str], int] = {}
-    for entry in entries:
-        request = entry.get("httpRequest") or {}
-        payload = entry.get("jsonPayload") or {}
-        url = request.get("requestUrl") or ""
-        host = url.split("/")[2] if "://" in url else url
-        decision = ((payload.get("authzPolicyInfo") or {}).get("result")
-                    or str(request.get("status") or "?"))
-        key = (host, decision)
-        seen[key] = seen.get(key, 0) + 1
+    def dig(node: dict, *names: str) -> str:
+        """First non-empty value for any of `names`, at any depth.
 
-    print(f"{len(entries)} gateway log entries, by destination and decision:\n")
-    for (host, decision), count in sorted(seen.items(), key=lambda kv: -kv[1]):
-        flag = "  <-- would be blocked under enforcement" if decision == "DENIED" else ""
-        print(f"  {count:>4}  {decision:<10} {host}{flag}")
+        The gateway's log schema is not something to guess at. An earlier
+        version of this function read two hard-coded paths, found neither on
+        115 real entries, and printed a table of blanks that looked like
+        "no destinations were contacted" rather than "this parser did not
+        understand the records". Searching by field name across the record,
+        and dumping a sample when that still finds nothing, fails loudly
+        instead.
+        """
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if key in names and isinstance(value, (str, int)) and str(value):
+                        return str(value)
+                    if isinstance(value, (dict, list)):
+                        stack.append(value)
+            elif isinstance(current, list):
+                stack.extend(current)
+        return ""
+
+    seen: dict[tuple[str, str], int] = {}
+    unparsed = 0
+    for entry in entries:
+        # "hostname" is where this gateway actually records the destination,
+        # under jsonPayload.enforcedGatewaySecurityPolicy. The others are kept
+        # because the schema is not contractual and has no reason to stay put.
+        url = dig(entry, "hostname", "requestUrl", "url", "destination",
+                  "upstream", "host", "serverName", "authority")
+        if "://" in url:
+            host = url.split("/")[2]
+        else:
+            host = url.split("/")[0] if url else ""
+        decision = dig(entry, "result", "authzResult", "decision") \
+            or str(dig(entry, "status") or "?")
+        if not host:
+            unparsed += 1
+            continue
+        seen[(host, decision)] = seen.get((host, decision), 0) + 1
+
+    print(f"{len(entries)} gateway log entries.\n")
+
+    # The gateway terminates TLS and re-originates it, so the client
+    # certificate it sees is the evidence for whether certificate-bound Agent
+    # Identity survived the hop. That is exactly the failure mode to look for
+    # when bound agents stop producing output, so it is summarised rather than
+    # left for someone to find by reading raw log records.
+    mtls_counts: dict[str, int] = {}
+    cert_errors: dict[str, int] = {}
+    for entry in entries:
+        mtls = (entry.get("jsonPayload") or {}).get("mtls") or {}
+        if not mtls:
+            continue
+        key = (f"present={mtls.get('clientCertPresent')} "
+               f"chainVerified={mtls.get('clientCertChainVerified')}")
+        mtls_counts[key] = mtls_counts.get(key, 0) + 1
+        error = str(mtls.get("clientCertError") or "").strip()
+        if error:
+            cert_errors[error[:160]] = cert_errors.get(error[:160], 0) + 1
+    if mtls_counts:
+        print("Client certificate, as the gateway saw it:\n")
+        for key, count in sorted(mtls_counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>4}  {key}")
+        for error, count in sorted(cert_errors.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>4}  clientCertError: {error}")
+        print()
+
+    if seen:
+        print("By destination and decision:\n")
+        for (host, decision), count in sorted(seen.items(), key=lambda kv: -kv[1]):
+            flag = "  <-- would be blocked under enforcement" if decision == "DENIED" else ""
+            print(f"  {count:>4}  {decision:<10} {host}{flag}")
+
+    if unparsed:
+        print(f"\n  {unparsed} entries had no recognisable destination field.")
+        sample = next((e for e in entries), None)
+        if sample is not None:
+            # Print the record's shape, not its contents: a request URL can
+            # carry a key-bearing path, and this output gets pasted around.
+            def shape(node, depth=0):
+                pad = "    " * (depth + 1)
+                if isinstance(node, dict):
+                    for key, value in sorted(node.items()):
+                        if isinstance(value, (dict, list)):
+                            print(f"{pad}{key}:")
+                            if depth < 2:
+                                shape(value, depth + 1)
+                        else:
+                            print(f"{pad}{key}")
+                elif isinstance(node, list) and node:
+                    shape(node[0], depth)
+
+            print("  Field names present on the first entry, so the parser above\n"
+                  "  can be pointed at the right one (values omitted deliberately):\n")
+            shape(sample)
+
+    if not seen:
+        print("\nNo destination could be extracted, so this is NOT yet evidence of\n"
+              "what the agents contacted. Do not treat an empty table as an empty\n"
+              "destination list.")
+        return 1
+
     print("\nEvery destination listed here must be registered in the Agent Registry\n"
           "and granted to the calling agent before enforcement is switched on.")
     return 0

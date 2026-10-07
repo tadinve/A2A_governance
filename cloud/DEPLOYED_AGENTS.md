@@ -316,11 +316,27 @@ model call, Secret Manager, KMS, the Auth Broker, Zoho, and the A2A hop. In
 audit-only mode none of that is blocked, but the path has changed, and that is
 worth a separate decision.
 
-Binding uses the documented PATCH of `spec.deploymentSpec.agentGatewayConfig`.
+Binding uses the documented PATCH of `spec.deployment_spec.agent_gateway_config`
+on an existing engine; no redeployment is needed, so engine ids and Agent
+Identity principals are preserved and `config/broker_clients.json` stays valid.
 PATCH does not alter `identity_type`, so it only works on an agent that already
 holds an Agent Identity -- all three here do, and `bind_agents_to_gateway.sh`
 refuses any agent that does not rather than binding one whose traffic IAP would
 have no principal to authorize.
+
+**The binding is eventually consistent.** Measured here: a PATCH accepted at
+05:29 did not read back for several minutes. Checking immediately reports a
+correctly-binding agent as a failure, which is how an earlier investigation
+concluded -- wrongly -- that the API silently ignored the write and that agents
+would have to be re-created. `bind_agents_to_gateway.sh` now polls for up to
+five minutes before calling it a failure, and a slow result is still a result.
+
+**Known regression, unresolved.** With all three agents bound, the two
+`verify_cloud.py` checks that require the model to run return empty responses;
+the three that are answered by pure policy code still pass. Gateway logs show
+traffic flowing and nothing denied, which is expected in `DRY_RUN`. The cause
+has not been established, so binding should be treated as not yet safe for a
+live demonstration. `--unbind` restores the previous behaviour.
 
 Before enforcement, the destination inventory has to be real rather than
 remembered: `cloud/gateway_destinations.py --list` derives it from call sites,

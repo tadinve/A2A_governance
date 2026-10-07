@@ -119,21 +119,42 @@ def test_binding_is_reversible():
     assert "--unbind" in read(BIND)
 
 
-def test_binding_verifies_the_change_actually_applied():
-    """A PATCH response is not evidence that the field persisted.
+def test_binding_uses_the_update_mask_the_sdk_emits():
+    """Match the Vertex SDK's own spelling rather than inventing one.
 
-    Observed live against a real project: all three agents reported "bound"
-    and read back with no agentGatewayConfig at all. The API returns an
-    ordinary non-error body for an update it does not apply, so the script
-    must read the resource back and compare rather than trust the response.
+    `_generate_deployment_spec_or_raise` in vertexai/_genai/agent_engines.py
+    appends "spec.deployment_spec.agent_gateway_config", so that is what this
+    script sends. Both spellings appear to be accepted by the API -- a binding
+    applied with the camelCase form was later observed to have persisted -- so
+    this pins consistency with the SDK, not a workaround for a broken mask.
     """
+    assert "updateMask=spec.deployment_spec.agent_gateway_config" in read(BIND)
+
+
+def test_binding_waits_for_eventual_consistency():
+    """The read-back must poll, because the binding is not immediate.
+
+    Measured on a live project: a PATCH accepted at 05:29 did not read back
+    for several minutes. A three-second check reported three correctly-binding
+    agents as failures, and that false negative sent an investigation into
+    migrating the whole deployment path for no reason. The polling window is
+    the guard against repeating it.
+    """
+    body = read(BIND)
+    assert "POLL_DEADLINE" in body, "the read-back must poll, not sample once"
+    assert "SECONDS + 300" in body, "the polling window must be minutes, not seconds"
+    assert "sleep 3\n" not in body, "a fixed three-second wait is the known bug"
+
+
+def test_binding_verifies_the_change_actually_applied():
+    """A PATCH response is not evidence that the field persisted."""
     body = read(BIND)
     assert "APPLIED=" in body, (
         "bind_agents_to_gateway.sh must read the resource back after PATCH")
     patch_index = body.index("-X PATCH")
     assert body.index("APPLIED=") > patch_index, (
         "the read-back must happen after the PATCH, not before")
-    assert "did not apply it" in body, (
+    assert "still not applied" in body, (
         "an unapplied change must be reported as a failure, not as success")
 
 
