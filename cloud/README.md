@@ -68,12 +68,43 @@ For a production resource, replace `roles/browser` with the narrowest resource-l
 
 `bash cloud/deploy_agents.sh` deploys both. For the `RemoteA2aAgent` variant, follow Google's current [A2A Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime). The authorization rule is the same: the caller's ADC becomes its Agent Identity inside Agent Runtime, and IAM on the target decides whether that principal may invoke it.
 
+## Agent Gateway (real, Google-managed)
+
+Distinct from `src/governance_demo/gateway_app.py`, which is the local FastAPI
+simulation of the same pattern and is not a Google product. Three separate
+commands, because only the first one is inert:
+
+```bash
+bash cloud/setup_agent_gateway.sh          # provision; binds nothing
+python3 cloud/verify_agent_gateway.py --pre-bind
+python3 cloud/gateway_destinations.py --list
+
+bash cloud/bind_agents_to_gateway.sh       # reroutes all agent egress
+python3 cloud/verify_agent_gateway.py --post-bind
+python3 cloud/verify_cloud.py              # the demo must still pass
+
+python3 cloud/verify_agent_gateway.py --observed   # what egress really happened
+bash cloud/configure_gateway_enforcement.sh        # fail closed; last
+```
+
+`deploy_to_gcp.sh --with-agent-gateway` performs the provisioning step only.
+Binding is reversible with `--unbind`; enforcement with `--revert`.
+
 ## Cleanup
 
 Delete only the deployment created by this lab from Agent Platform -> Deployments. If you granted a role, remove that exact IAM binding. The package does not automate deletion so it cannot accidentally remove another workshop deployment.
+
+If an Agent Gateway was provisioned, unbind the agents first
+(`bash cloud/bind_agents_to_gateway.sh --unbind`) and only then delete the
+gateway, the authorization policy, and the authorization extension. Deleting a
+gateway that agents are still bound to leaves them pointing at a resource that
+no longer exists.
 
 ## Current authoritative references
 
 - [Use Agent Identity with Agent Runtime](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-identity)
 - [Agent Identity overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/govern/agent-identity-overview)
 - [A2A on Agent Runtime codelab](https://codelabs.developers.google.com/adk-a2a-agent-runtime)
+- [Agent Gateway overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/govern/gateways/agent-gateway-overview)
+- [Route Agent Runtime traffic through Agent Gateway](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/runtime/agent-gateway-runtime-deploy)
+- [Agent Gateway egress codelab](https://codelabs.developers.google.com/agw-cuj-arun-egress-gmcp)

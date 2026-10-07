@@ -296,8 +296,37 @@ local. The deployed agents carry their governance logic in-process instead of
 calling those services, because a deployed agent cannot reach `127.0.0.1`.
 
 Agent Gateway is **not** required to make A2A work -- that is demonstrated
-above without it. It is an additional governance layer (outbound policy, DPoP
-and credential handling, content inspection, audit) and is not modelled here.
+above without it. It is an additional governance layer: outbound policy,
+credential handling, content inspection, audit.
+
+A real Google-managed Agent Gateway can now be provisioned alongside this
+deployment, in three deliberately separate steps. They are separate because
+only the first is inert:
+
+| Step | Command | Effect on a running demo |
+|---|---|---|
+| Provision | `bash cloud/setup_agent_gateway.sh` | None. A gateway with nothing bound carries no traffic |
+| Bind | `bash cloud/bind_agents_to_gateway.sh` | **Reroutes all agent egress** through the gateway. Audit-only, nothing blocked. Reversible with `--unbind` |
+| Enforce | `bash cloud/configure_gateway_enforcement.sh` | **Fail closed.** Any unregistered destination becomes a 403 |
+
+`deploy_to_gcp.sh --with-agent-gateway` runs the first step only, and cannot
+run the other two. Binding is not a side effect of a setup script, because
+once an agent is bound *every* outbound call it makes is proxied -- the Gemini
+model call, Secret Manager, KMS, the Auth Broker, Zoho, and the A2A hop. In
+audit-only mode none of that is blocked, but the path has changed, and that is
+worth a separate decision.
+
+Binding uses the documented PATCH of `spec.deploymentSpec.agentGatewayConfig`.
+PATCH does not alter `identity_type`, so it only works on an agent that already
+holds an Agent Identity -- all three here do, and `bind_agents_to_gateway.sh`
+refuses any agent that does not rather than binding one whose traffic IAP would
+have no principal to authorize.
+
+Before enforcement, the destination inventory has to be real rather than
+remembered: `cloud/gateway_destinations.py --list` derives it from call sites,
+and `cloud/verify_agent_gateway.py --observed` reports what the gateway
+actually saw. Hostname matching is exact and there are no wildcards, so one
+omission is one broken governance path.
 
 Deploying the full control plane to Cloud Run is a larger job with four real
 obstacles, all of them worth naming before anyone attempts it:

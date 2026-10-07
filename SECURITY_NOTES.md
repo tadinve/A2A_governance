@@ -130,3 +130,40 @@ The agents never receive a Zoho access or refresh token. The Zoho Inventory conn
 Approval is bound to vendor, reference, line items, rates, quantities, and total. A mutation changes the hash and invalidates approval. Never treat a chat response, agent claim, or generic “approved” flag as transaction approval.
 
 Do not log authorization headers, access tokens, refresh tokens, or client secrets. Restrict outbound connector traffic to the correct Zoho data-center hostnames.
+
+## Agent Gateway: the local simulation and the cloud control
+
+Two distinct things in this repository share the name, and conflating them
+would overstate what is actually enforced.
+
+`src/governance_demo/gateway_app.py` (port 8102) is a **local simulation**. It
+is this project's own FastAPI service, it enforces audience/actor/scope/route
+and content checks in code written here, and it trusts `X-Gateway-Verified` —
+a forgeable header, as the paragraph above says. It is deterministic, needs no
+cloud account, and is unit-tested. It is a model of the pattern. It is not a
+Google product and its tests are not evidence about Google Cloud.
+
+`cloud/setup_agent_gateway.sh` provisions a real **Google Cloud Agent Gateway**
+in Agent-to-Anywhere (egress) mode, attached to the regional Agent Registry,
+with IAP authorization. There the caller is an Agent Identity verified by
+Google, not a header, and the decision is made by infrastructure rather than
+by application code.
+
+Both are kept. Neither replaces the other, and neither replaces the Auth
+Broker: a permitted gateway route is not a scoped delegation, and a valid
+delegated token does not grant permission to traverse the gateway. They are
+independent controls and a request has to satisfy each one that applies.
+
+**Rollout is staged, and the staging is a security property rather than
+caution.** Provisioning is inert. Binding reroutes all agent egress and is a
+separate command. Enforcement fails closed and is a third. Enforcing before
+the destination inventory has been *observed* — not guessed — converts every
+missed hostname into a 403 on a governance path, which is indistinguishable at
+the moment of failure from the control working correctly. Build the inventory
+with `cloud/gateway_destinations.py --list`, confirm it against
+`cloud/verify_agent_gateway.py --observed`, and only then enforce.
+
+**Still open.** Until enforcement is switched on and the deny cases are
+captured from gateway logs, the Google-managed gateway is configured but not
+yet demonstrated. An agent declining in its own words is not proof that
+infrastructure denied anything; the 403 and the log line are.

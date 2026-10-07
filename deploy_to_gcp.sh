@@ -20,10 +20,16 @@
 #
 #   bash deploy_to_gcp.sh PROJECT_ID [options]
 #
-#     --region REGION   default us-central1
-#     --skip-ui         agents and control plane only, no Cloud Run UI
-#     --skip-seed       do not touch Zoho: no connector secrets, no demo data
-#     --yes             do not ask for confirmation
+#     --region REGION        default us-central1
+#     --skip-ui              agents and control plane only, no Cloud Run UI
+#     --skip-seed            do not touch Zoho: no connector secrets, no demo data
+#     --with-agent-gateway   also provision a real Agent Gateway (audit-only).
+#                            Provisions only: it never binds an agent and never
+#                            enables enforcement. Both of those are separate,
+#                            deliberate commands, because both change or block
+#                            live traffic -- see cloud/bind_agents_to_gateway.sh
+#                            and cloud/configure_gateway_enforcement.sh
+#     --yes                  do not ask for confirmation
 #
 #   bash deploy_to_gcp.sh my-lab-project
 #   bash deploy_to_gcp.sh my-lab-project --skip-ui --region europe-west4
@@ -44,6 +50,7 @@ PROJECT_ID=""
 REGION=""
 SKIP_UI=false
 SKIP_SEED=false
+WITH_AGENT_GATEWAY=false
 ASSUME_YES=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --region) REGION="${2:?--region needs a value}"; shift 2 ;;
     --skip-ui) SKIP_UI=true; shift ;;
     --skip-seed) SKIP_SEED=true; shift ;;
+    --with-agent-gateway) WITH_AGENT_GATEWAY=true; shift ;;
     --yes|-y) ASSUME_YES=true; shift ;;
     -*) echo "unknown option: $1" >&2; usage 2 ;;
     *)
@@ -372,6 +380,19 @@ fi
 if [[ "$SKIP_UI" == false ]]; then
   step "11. Inventory & Purchasing UI on Cloud Run"
   bash "$CLOUD_ROOT/deploy_inventory_ui.sh"
+fi
+
+if [[ "$WITH_AGENT_GATEWAY" == true ]]; then
+  step "12. Agent Gateway (provision only, audit-only)"
+  # Provisioning is inert: a gateway with nothing bound to it carries no
+  # traffic, so this cannot affect the deployment above. Binding the agents
+  # reroutes every outbound call they make and is therefore NOT done here --
+  # it is cloud/bind_agents_to_gateway.sh, run deliberately, after the
+  # destination inventory has been built. Enforcement is a third step again.
+  bash "$CLOUD_ROOT/setup_agent_gateway.sh" --project "$PROJECT_ID" --region "$REGION"
+  "$PY" "$CLOUD_ROOT/verify_agent_gateway.py" --project "$PROJECT_ID" \
+    --region "$REGION" --pre-bind \
+    || info "WARNING: gateway verification reported a problem; see above"
 fi
 
 write_env_snapshot

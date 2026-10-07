@@ -37,7 +37,7 @@ Raw bearer credentials are never printed. The script also proves that direct cal
 |---:|---|---|
 | 8100 | Agent Registry | Agent discovery metadata |
 | 8101 | Identity Broker/Auth Manager | Authenticates clients and decides which delegations are permitted |
-| 8102 | Agent Gateway | Audience, actor, scope, route, and content enforcement |
+| 8102 | Agent Gateway (local simulation) | Audience, actor, scope, route, and content enforcement. This is a local FastAPI model of the gateway pattern, not Google Cloud Agent Gateway -- see below |
 | 8103 | Inventory Agent | Checks stock and orchestrates reorder |
 | 8104 | Procurement Agent | Owns PO drafting and status capabilities |
 | 8105 | Zoho Inventory MCP | Exposes only `get_inventory` |
@@ -46,6 +46,24 @@ Raw bearer credentials are never printed. The script also proves that direct cal
 | 8108 | Auth Broker | Holds the delegation signing key and is the only component that can sign |
 
 Swagger UI is at `http://127.0.0.1:PORT/docs` while running.
+
+### Two different things called "Agent Gateway"
+
+They are not the same component and the difference is worth stating plainly,
+because one is a teaching model and the other is a cloud control:
+
+| | `src/governance_demo/gateway_app.py` (port 8102) | Google Cloud Agent Gateway |
+|---|---|---|
+| What it is | A local FastAPI service written for this demo | A Google-managed product |
+| Enforced by | This repository's own code | Google Cloud infrastructure |
+| Runs | Offline, on localhost, in unit tests | In a project, in front of real egress |
+| Identity | `X-Gateway-Verified`, which is forgeable | Agent Identity, verified by IAP |
+| Set up by | `scripts/start_local.sh` | `cloud/setup_agent_gateway.sh` |
+
+The local one is kept because it is deterministic, needs no cloud account, and
+makes the pattern testable. It is a simulation. Passing its tests is not
+evidence that any Google-managed control is in force; that claim belongs to
+`cloud/verify_agent_gateway.py`, which reads live cloud resources.
 
 ## Deploy to Google Cloud
 

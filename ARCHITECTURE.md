@@ -100,3 +100,40 @@ $$
 $$
 
 Approval adds a separate invariant: authenticated approver, pending state, and exact draft-hash match.
+
+## Where the gateway sits
+
+The invariant above is enforced in two places that must not be confused.
+
+Locally, `src/governance_demo/gateway_app.py` (port 8102) evaluates it in this
+project's own code. That is a simulation: deterministic, offline, unit-tested,
+and trusting a forgeable `X-Gateway-Verified` header.
+
+In the cloud, a Google-managed **Agent Gateway** in Agent-to-Anywhere mode can
+evaluate the connectivity half of it as infrastructure. Each outbound call
+carries the calling agent's Agent Identity, IAP checks
+`iap.resources.egressViaIAP` against the registered destination, and the
+decision happens before the request leaves Google's network:
+
+```
+Inventory Agent (Agent Identity)
+        |  all outbound traffic, once bound
+        v
+  Agent Gateway  --(Agent Registry: which destinations exist)
+        |        --(IAP: may this principal reach this one)
+        v
+  Zoho connector / Procurement A2A / Google APIs
+```
+
+This narrows the `registered target` and `authenticated actor` terms, and
+nothing else. It does not carry a scope, so it does not replace the Auth
+Broker's delegated token; it does not know what a draft hash is, so it does
+not replace human approval. A call still has to satisfy every term that
+applies to it:
+
+| Term | Enforced by |
+|---|---|
+| registered target, authenticated actor | Agent Gateway + IAP (cloud), gateway_app.py (local) |
+| audience, scope, actor chain | Auth Broker's KMS-signed delegation |
+| route policy | delegation policy in each agent package |
+| approval | human session bound to an exact draft hash |
