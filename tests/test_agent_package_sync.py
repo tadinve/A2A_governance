@@ -30,7 +30,7 @@ AGENT_PACKAGES = ["inventory_agent", "procurement_agent", "procurement_a2a"]
 
 # Files each package carries its own copy of, byte-for-byte, because Agent
 # Runtime uploads the folder whole and none of them may import another.
-SHARED_FILES = ["governance.py", "zoho_mcp.py"]
+SHARED_FILES = ["governance.py", "zoho_mcp.py", "gateway_trust.py", "gateway_ca.pem"]
 
 
 def _read(package: str, filename: str) -> str:

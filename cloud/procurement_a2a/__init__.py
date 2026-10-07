@@ -1,6 +1,13 @@
 """Builds the A2A-capable Procurement Agent."""
 from __future__ import annotations
 
+# Trust the gateway's TLS inspection CA before anything constructs an SSL
+# context. This module's own imports are local to build_agent(), so doing it
+# here is early enough -- but it still has to precede them, not follow them.
+from . import gateway_trust
+
+gateway_trust.install()
+
 
 def build_agent():
     """Construct the A2aAgent. Imports are local so the module stays importable."""

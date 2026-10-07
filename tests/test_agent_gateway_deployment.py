@@ -257,3 +257,86 @@ def test_destination_inventory_excludes_inventory_agent_from_the_write_path():
     assert "INVENTORY" not in block, (
         "Inventory Agent must not be granted the Zoho write connector")
     assert "PROCUREMENT" in block
+
+
+# --- TLS trust for gateway-bound agents -------------------------------------
+#
+# A TLS-terminating gateway re-signs outbound traffic with a private root. The
+# fix is to add that root, and the thing worth guarding is that nobody ever
+# "fixes" a certificate error the easy way instead.
+
+AGENT_PACKAGES = ["inventory_agent", "procurement_agent", "procurement_a2a"]
+
+
+@pytest.mark.parametrize("package", AGENT_PACKAGES)
+def test_every_agent_package_ships_the_gateway_ca_and_trust_module(package):
+    assert (CLOUD / package / "gateway_trust.py").is_file()
+    ca = CLOUD / package / "gateway_ca.pem"
+    assert ca.is_file()
+    assert "BEGIN CERTIFICATE" in ca.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("package", AGENT_PACKAGES)
+def test_trust_module_never_disables_verification(package):
+    """The one fix that must never be made.
+
+    An unverifiable proxy is indistinguishable from an attacker, so a
+    certificate error is never to be answered by switching verification off.
+
+    Checked against the parsed syntax tree, not the file text: the module's
+    own docstring names these things in order to say it does not do them, and
+    a substring search cannot tell a prohibition from an instance of the thing
+    prohibited.
+    """
+    import ast
+
+    tree = ast.parse(read(CLOUD / package / "gateway_trust.py"))
+    banned_names = {"_create_unverified_context", "CERT_NONE"}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in banned_names:
+            pytest.fail(f"{package}: uses {node.attr}")
+        if isinstance(node, ast.Name) and node.id in banned_names:
+            pytest.fail(f"{package}: uses {node.id}")
+        if isinstance(node, ast.keyword) and node.arg in ("verify", "check_hostname"):
+            if isinstance(node.value, ast.Constant) and node.value.value is False:
+                pytest.fail(f"{package}: passes {node.arg}=False")
+
+
+@pytest.mark.parametrize("package", AGENT_PACKAGES)
+def test_trust_module_augments_rather_than_replaces_public_roots(package):
+    """certifi's bundle is copied in, not swapped out."""
+    body = read(CLOUD / package / "gateway_trust.py")
+    assert "certifi.where()" in body, "must start from the runtime's own CA bundle"
+    # All three matter and they are read by different stacks: OpenSSL/aiohttp,
+    # requests, and gRPC's own C core. Setting only the first two yields a
+    # partially working agent whose gRPC clients still fail.
+    for variable in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE",
+                     "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
+        assert variable in body, f"{package}: must set {variable}"
+
+
+@pytest.mark.parametrize("package", AGENT_PACKAGES)
+def test_trust_is_opt_in(package):
+    """An unbound agent has no proxy to trust and must keep the stock store."""
+    assert "AGENT_GATEWAY_CA_TRUST" in read(CLOUD / package / "gateway_trust.py")
+
+
+@pytest.mark.parametrize("package", ["inventory_agent", "procurement_agent"])
+def test_trust_is_installed_before_the_agent_is_imported(package):
+    """OpenSSL reads SSL_CERT_FILE when a context is created, so order matters."""
+    body = read(CLOUD / package / "__init__.py")
+    assert body.index("gateway_trust.install()") < body.index("from . import agent"), (
+        "gateway_trust.install() must run before the agent module is imported")
+
+
+def test_binding_retries_while_the_engine_is_updating():
+    """A gateway change redeploys the engine; updates are rejected meanwhile.
+
+    The state is not exposed on GET, so the rejection is the only signal. An
+    unbind immediately followed by a bind silently did nothing before this.
+    """
+    body = read(BIND)
+    assert "Current state: UPDATING" in body, (
+        "the UPDATING rejection must be recognised and retried, not treated "
+        "as a permanent failure")

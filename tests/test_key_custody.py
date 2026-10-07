@@ -16,12 +16,39 @@ CLOUD = ROOT / "cloud"
 
 
 def test_no_private_key_files_anywhere_in_the_repository():
-    skip = {".venv", ".git", "__pycache__", "node_modules"}
-    offenders = [
-        path.relative_to(ROOT)
-        for path in ROOT.rglob("*.pem")
-        if not skip & set(path.parts)
-    ]
+    """No private key material on disk, judged by content rather than suffix.
+
+    This used to ban every *.pem path outright. That was both too strict and
+    too loose: too strict because a PUBLIC certificate is legitimately shipped
+    with the agent packages (cloud/*/gateway_ca.pem, the Agent Gateway's TLS
+    inspection root, which has to be in the upload for an agent routed through
+    the gateway to verify the proxy at all); too loose because a private key
+    saved as .key, .txt or with no extension walked straight past it.
+
+    Looking inside every file closes both gaps. A PEM private key announces
+    itself in its header no matter what the file is called, and a certificate
+    never carries one.
+    """
+    skip = {".venv", ".git", "__pycache__", "node_modules", "evidence", "runtime"}
+    markers = ("BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY",
+               "BEGIN EC PRIVATE KEY", "BEGIN DSA PRIVATE KEY",
+               "BEGIN OPENSSH PRIVATE KEY", "BEGIN ENCRYPTED PRIVATE KEY")
+
+    offenders = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or skip & set(path.parts):
+            continue
+        # This test is itself a file full of those markers; so is anything
+        # else that merely names them.
+        if path.resolve() == Path(__file__).resolve():
+            continue
+        try:
+            head = path.read_text(encoding="utf-8", errors="ignore")[:200_000]
+        except OSError:
+            continue
+        if any(marker in head for marker in markers):
+            offenders.append(path.relative_to(ROOT))
+
     assert offenders == [], f"private key material on disk: {offenders}"
 
 

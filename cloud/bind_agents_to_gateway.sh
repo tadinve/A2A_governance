@@ -173,11 +173,33 @@ print(json.dumps({"spec": {"deploymentSpec": {"agentGatewayConfig":
     continue
   fi
 
-  RESPONSE="$(curl -sS -X PATCH \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "$BODY" \
-    "${HOST}/${RESOURCE}?updateMask=spec.deployment_spec.agent_gateway_config" 2>&1)" || true
+  # Changing the gateway config makes the engine redeploy, and while it does,
+  # every further update is rejected with
+  #   400 FAILED_PRECONDITION: Cannot update ReasoningEngine ... as it is not
+  #   in ACTIVE state. Current state: UPDATING
+  # That state is NOT exposed on a GET -- neither v1 nor v1beta1 returns it --
+  # so the only way to observe it is to attempt the write and read the error.
+  # Measured here: roughly three and a half minutes. Retrying on that specific
+  # error is therefore the correct behaviour; treating it as a failure means
+  # an unbind immediately followed by a bind silently does nothing.
+  PATCH_DEADLINE=$(( SECONDS + 600 ))
+  while :; do
+    RESPONSE="$(curl -sS -X PATCH \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$BODY" \
+      "${HOST}/${RESOURCE}?updateMask=spec.deployment_spec.agent_gateway_config" 2>&1)" || true
+    if ! grep -q "Current state: UPDATING" <<<"$RESPONSE"; then
+      break
+    fi
+    if (( SECONDS >= PATCH_DEADLINE )); then
+      echo "    $NAME: still UPDATING after 10 minutes; not retrying further" >&2
+      break
+    fi
+    printf '    %s: engine is UPDATING, waiting to retry...\r' "$NAME"
+    sleep 20
+  done
+  printf '                                                              \r'
 
   # The PATCH response is not evidence, so the resource is read back and
   # compared. But the read-back must be PATIENT: this binding is eventually

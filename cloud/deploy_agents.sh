@@ -63,6 +63,11 @@ AUTH_BROKER_URL="${AUTH_BROKER_URL:-}"
 ZOHO_ORGANIZATION_ID="${ZOHO_ORGANIZATION_ID:-}"
 DEMO_SKU="${DEMO_SKU:-DEMO-WIDGET-A}"
 ZOHO_REORDER_POLICY="${ZOHO_REORDER_POLICY:-{\"DEMO-WIDGET-A\":{\"target_stock\":100,\"min_order_quantity\":1}}}"
+# Trusting the Agent Gateway's TLS inspection CA is opt-in and only correct for
+# an agent that is actually routed through the gateway. An unbound agent has no
+# proxy to trust, so it keeps the stock trust store and byte-identical
+# behaviour. gateway_trust.py does nothing unless this is exactly "1".
+AGENT_GATEWAY_CA_TRUST="${AGENT_GATEWAY_CA_TRUST:-0}"
 # Agent Runtime rejects a deployment outright if any declared env var is an
 # empty string ("Required field is not set", identified only by index, not
 # name) -- these two are essential to every path in the agent, so an empty
@@ -122,6 +127,7 @@ if [[ "$ONLY" == "both" || "$ONLY" == "procurement" ]]; then
     emit_if_set ZOHO_ORGANIZATION_ID "$ZOHO_ORGANIZATION_ID"
     echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
     echo "DEMO_SKU=$DEMO_SKU"
+    echo "AGENT_GATEWAY_CA_TRUST=$AGENT_GATEWAY_CA_TRUST"
   } > "$STAGED_P"
   deploy_agent procurement_agent "Procurement Agent"
   cleanup_p
@@ -152,6 +158,7 @@ if [[ "$ONLY" == "both" || "$ONLY" == "inventory" ]]; then
     emit_if_set ZOHO_ORGANIZATION_ID "$ZOHO_ORGANIZATION_ID"
     echo "ZOHO_REORDER_POLICY=$ZOHO_REORDER_POLICY"
     echo "DEMO_SKU=$DEMO_SKU"
+    echo "AGENT_GATEWAY_CA_TRUST=$AGENT_GATEWAY_CA_TRUST"
   } > "$STAGED"
   info "staged PROCUREMENT_A2A and the KMS key name into the upload (no key material)"
   deploy_agent inventory_agent "Inventory Agent"

@@ -9,6 +9,12 @@ cloud/.venv/
 # key, backed by Cloud KMS in a deployment. This pattern stays as a tripwire so
 # a reintroduced key file can never be committed by accident.
 *.pem
+# Exception: the Agent Gateway's TLS inspection root is a PUBLIC certificate and
+# has to travel with each agent package, because an agent routed through the
+# gateway cannot verify the proxy without it. tests/test_key_custody.py now
+# judges files by content rather than suffix, so a private key placed here
+# would still fail the build.
+!cloud/*/gateway_ca.pem
 runtime/*.pid
 runtime/*.log
 

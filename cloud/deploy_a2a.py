@@ -71,6 +71,12 @@ def main() -> int:
     optional_org_id = os.environ.get("ZOHO_ORGANIZATION_ID", "").strip()
     if optional_org_id:
         env_vars["ZOHO_ORGANIZATION_ID"] = optional_org_id
+    # Opt-in, and only correct for an agent routed through the gateway: its TLS
+    # inspection re-signs every outbound connection with a private root, which
+    # a stock trust store rejects. An unbound agent has no proxy to trust and
+    # keeps the default store. See gateway_trust.py.
+    if os.environ.get("AGENT_GATEWAY_CA_TRUST", "").strip() == "1":
+        env_vars["AGENT_GATEWAY_CA_TRUST"] = "1"
 
     config = dict(
         display_name=DISPLAY_NAME,
