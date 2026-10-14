@@ -13,10 +13,10 @@
   "inventory-agent-principal": {
     "description": "Inventory Agent on Agent Runtime. The only deployed principal that may start a delegation chain, because it is the one a human talks to. That human is still 'demo-user' rather than an authenticated identity; see SECURITY_NOTES.md.",
     "allowed_principals": [
-      "5216601581901840384",
-      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/5216601581901840384",
-      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/5216601581901840384",
-      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/5216601581901840384"
+      "4998459299584802816",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/4998459299584802816",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/4998459299584802816",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/4998459299584802816"
     ],
     "delegation_actor": "inventory-agent",
     "may_mint": [
@@ -28,10 +28,10 @@
   "procurement-agent-principal": {
     "description": "Procurement Agent (A2A) on Agent Runtime. It may extend a delegation it was handed and nothing else: no user_access_token rule exists for it, so it cannot manufacture the human grant it is supposed to receive over A2A.",
     "allowed_principals": [
-      "8011876799057231872",
-      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8011876799057231872",
-      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8011876799057231872",
-      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8011876799057231872"
+      "1813288463127019520",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1813288463127019520",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1813288463127019520",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1813288463127019520"
     ],
     "delegation_actor": "procurement-agent",
     "may_mint": [
@@ -42,10 +42,10 @@
   "procurement-agent-adk-principal": {
     "description": "The non-A2A Procurement Agent deployment. Same code base, no minting rights at all: it cannot originate a chain and has no inbound A2A delegation to extend, so it reads purchase orders and refuses to draft. Listed with an empty may_mint rather than omitted, so the denial is a stated policy and not an accident of configuration.",
     "allowed_principals": [
-      "8414438792311603200",
-      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8414438792311603200",
-      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8414438792311603200",
-      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/972256875165/locations/us-central1/reasoningEngines/8414438792311603200"
+      "1527028411812282368",
+      "agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1527028411812282368",
+      "principal://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1527028411812282368",
+      "spiffe://agents.global.org-616463121992.system.id.goog/resources/aiplatform/projects/472940289598/locations/us-central1/reasoningEngines/1527028411812282368"
     ],
     "delegation_actor": "procurement-agent",
     "may_mint": [],

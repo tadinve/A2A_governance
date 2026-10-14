@@ -22,6 +22,8 @@ SERVICE="a2a-inventory-ui"
 SA_NAME="a2a-inventory-ui"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+# The Google Cloud client libraries live in cloud/.venv, not the system python3.
+PY="$REPO_ROOT/cloud/.venv/bin/python"
 
 step() { echo; echo "=== $* ==="; }
 info() { echo "    $*"; }
@@ -100,7 +102,7 @@ step "Finding the deployed Inventory Agent to connect the UI to"
 # Inventory Agent -> Zoho -- rather than reading Zoho directly under the UI's
 # own service account. Resolved once, here, and passed in as an env var
 # rather than looked up live on every request.
-INVENTORY_AGENT_RESOURCE="$(python3 - "$PROJECT_ID" "$REGION" <<'PYEOF'
+INVENTORY_AGENT_RESOURCE="$("$PY" - "$PROJECT_ID" "$REGION" <<'PYEOF'
 import sys
 import google.auth, google.auth.transport.requests
 project, region = sys.argv[1], sys.argv[2]
@@ -118,7 +120,7 @@ if [[ -n "$INVENTORY_AGENT_RESOURCE" ]]; then
   # Cloud Run IAM (roles/run.invoker on the UI service) is a separate surface
   # from this: this grant is what lets the UI's identity invoke the agent's
   # reasoningEngine once a request already reached the UI.
-  python3 "$REPO_ROOT/cloud/iam_binding.py" --resource "$INVENTORY_AGENT_RESOURCE"     --member "serviceAccount:${SA_EMAIL}" --role roles/aiplatform.user >/dev/null
+  "$PY" "$REPO_ROOT/cloud/iam_binding.py" --resource "$INVENTORY_AGENT_RESOURCE"     --member "serviceAccount:${SA_EMAIL}" --role roles/aiplatform.user >/dev/null
   info "granted roles/aiplatform.user to $SA_EMAIL on it"
 else
   info "WARNING: Inventory Agent is not deployed yet. The UI will fall back to"

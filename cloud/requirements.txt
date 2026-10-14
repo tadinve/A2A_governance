@@ -1,2 +1,6 @@
 google-cloud-aiplatform[adk,agent_engines]
 google-adk[gcp,otel-gcp]==2.6.0
+google-cloud-kms
+google-cloud-secret-manager
+a2a-sdk[http-server]
+PyJWT>=2.8
